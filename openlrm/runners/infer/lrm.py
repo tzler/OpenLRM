@@ -30,6 +30,8 @@ from openlrm.utils.logging import configure_logger
 from openlrm.runners import REGISTRY_RUNNERS
 from openlrm.utils.video import images_to_video
 from openlrm.utils.hf_hub import wrap_model_hub
+# tyler adds 
+from openlrm.datasets.cam_utils import relative_views 
 
 
 logger = get_logger(__name__)
@@ -152,6 +154,17 @@ class LRMInferrer(Inferrer):
         render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
         return render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
 
+    def _render_cameras_relative(self, batch_size: int = 1, device: torch.device = torch.device('cpu')):
+        # return: (N, M, D_cam_render)
+        render_camera_extrinsics = relative_views(self, device=device)
+        render_camera_intrinsics = create_intrinsics(
+            f=0.75,
+            c=0.5,
+            device=device,
+        ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
+        render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
+        return render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
+
     def infer_planes(self, image: torch.Tensor, source_cam_dist: float):
         N = image.shape[0]
         source_camera = self._default_source_camera(dist_to_center=source_cam_dist, batch_size=N, device=self.device)
@@ -160,12 +173,20 @@ class LRMInferrer(Inferrer):
         return planes
 
     def infer_video(self, planes: torch.Tensor, frame_size: int, render_size: int, render_views: int, render_fps: int, dump_video_path: str):
+        
         N = planes.shape[0]
-        render_cameras = self._default_render_cameras(n_views=render_views, batch_size=N, device=self.device)
+        print('\n\nN:', N)
+        print('\nself.cfg.image_input', self.cfg.image_input)
+        ####render_cameras = self._default_render_cameras(n_views=render_views, batch_size=N, device=self.device)
+        render_cameras = self._render_cameras_relative(batch_size=N, device=self.device)
+        
+        print('\n\nRENDER CAMERAS: ', render_cameras.shape)
         render_anchors = torch.zeros(N, render_cameras.shape[1], 2, device=self.device)
+        print('\n\nrender_anchors: ', render_anchors.shape)
         render_resolutions = torch.ones(N, render_cameras.shape[1], 1, device=self.device) * render_size
+        print('\n\nrender_resolutions: ', render_resolutions.shape)
         render_bg_colors = torch.ones(N, render_cameras.shape[1], 1, device=self.device, dtype=torch.float32) * 1.
-
+        
         frames = []
         for i in range(0, render_cameras.shape[1], frame_size):
             frames.append(

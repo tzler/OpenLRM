@@ -168,6 +168,8 @@ def surrounding_views_linspace(n_views: int, radius: float = 2.0, height: float 
     assert n_views > 0
     assert radius > 0
 
+    print('\n\nself.cfg', cfg)
+
     theta = torch.linspace(-torch.pi / 2, 3 * torch.pi / 2, n_views, device=device)
     projected_radius = math.sqrt(radius ** 2 - height ** 2)
     x = torch.cos(theta) * projected_radius
@@ -175,10 +177,60 @@ def surrounding_views_linspace(n_views: int, radius: float = 2.0, height: float 
     z = torch.full((n_views,), height, device=device)
 
     camera_positions = torch.stack([x, y, z], dim=1)
+
     extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
 
+    print('\nsurrounding_views_linespace')
+    print('\nn_views', n_views)
+    print('\npositions', camera_positions.shape)
+    print('\nextrinsics', extrinsics.shape)
     return extrinsics
 
+def relative_views(self, radius: float = 2.0, height: float = 0.8, device: torch.device = torch.device('cpu')):
+    """
+    custom for tyler 
+    ref: surrounding_views_linspace() 
+    """
+    import pickle 
+    
+    imagepath = self.cfg.image_input
+    
+    i_trial = imagepath.split('/')[-1].split('_image')[0]
+
+    print('\n\n', imagepath, imagepath)
+
+    i_trial = imagepath.split('/')[-1].split('_image')[0]
+
+    _idx = int(imagepath.split('/')[-1].split('_')[3][-1])
+
+    ipath = '/content/gdrive/MyDrive/perirhinal_function/model_outputs/barense_cameras/%s.pickle'
+
+    with open(ipath%i_trial, 'rb') as handle:
+        camera_info = pickle.load(handle)
+
+    rotation_matrices = [i[:3,:3] for i in camera_info['poses']]
+    rotation_relativeto0 = [rotation_matrices[_idx].T @ i for i in rotation_matrices]
+
+    translation_vecs = [i[:3,3] for i in camera_info['poses']]
+    translation_relativeto0 = [translation_vecs[_idx] - i for i in translation_vecs]
+    
+    print('\n\nDETERMINED RELATIVE CAMERA EXTRINSICS\n\n')
+    
+    n_views = 20
+
+    theta = torch.linspace(-torch.pi / 2, 3 * torch.pi / 2, n_views, device=device)
+    projected_radius = math.sqrt(radius ** 2 - height ** 2)
+    x = torch.cos(theta) * projected_radius
+    y = torch.sin(theta) * projected_radius
+    z = torch.full((n_views,), height, device=device)
+    camera_positions = torch.stack([x, y, z], dim=1)
+    extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
+
+    print('\nsurrounding_views_linespace')
+    print('\nn_views', n_views)
+    print('\npositions', camera_positions.shape)
+    print('\nextrinsics', extrinsics.shape)
+    return extrinsics
 
 def create_intrinsics(
     f: float,
