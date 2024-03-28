@@ -33,9 +33,7 @@ from openlrm.utils.hf_hub import wrap_model_hub
 # tyler adds 
 from openlrm.datasets.cam_utils import relative_views 
 
-
 logger = get_logger(__name__)
-
 
 def parse_configs():
 
@@ -47,6 +45,11 @@ def parse_configs():
     cfg = OmegaConf.create()
     cli_cfg = OmegaConf.from_cli(unknown)
 
+    cfg.infer_relative = 'from_relative' in cli_cfg
+    if cfg.infer_relative: 
+        cfg.dustr_viewpoint_path = '/content/gdrive/MyDrive/perirhinal_function/model_outputs/barense_cameras/'
+        cfg.relative_viewpoints_dir = './dumps/relative_viewpoints'
+    
     # parse from ENV
     if os.environ.get('APP_INFER') is not None:
         args.infer = os.environ.get('APP_INFER')
@@ -156,14 +159,14 @@ class LRMInferrer(Inferrer):
 
     def _render_cameras_relative(self, batch_size: int = 1, device: torch.device = torch.device('cpu')):
         # return: (N, M, D_cam_render)
-        render_camera_extrinsics = relative_views(self, device=device)
+        render_camera_extrinsics, reference_images, base_image = relative_views(self, device=device)
         render_camera_intrinsics = create_intrinsics(
             f=0.75,
             c=0.5,
             device=device,
         ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
         render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
-        return render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
+        return render_cameras.unsqueeze(0).repeat(batch_size, 1, 1), reference_images, base_image
 
     def infer_planes(self, image: torch.Tensor, source_cam_dist: float):
         N = image.shape[0]
@@ -175,18 +178,16 @@ class LRMInferrer(Inferrer):
     def infer_video(self, planes: torch.Tensor, frame_size: int, render_size: int, render_views: int, render_fps: int, dump_video_path: str):
         
         N = planes.shape[0]
-        print('\n\nN:', N)
-        print('\nself.cfg.image_input', self.cfg.image_input)
-        ####render_cameras = self._default_render_cameras(n_views=render_views, batch_size=N, device=self.device)
-        render_cameras = self._render_cameras_relative(batch_size=N, device=self.device)
+
+        render_views = 20 
+
+        render_cameras = self._default_render_cameras(n_views=render_views, batch_size=N, device=self.device)
         
-        print('\n\nRENDER CAMERAS: ', render_cameras.shape)
         render_anchors = torch.zeros(N, render_cameras.shape[1], 2, device=self.device)
-        print('\n\nrender_anchors: ', render_anchors.shape)
         render_resolutions = torch.ones(N, render_cameras.shape[1], 1, device=self.device) * render_size
-        print('\n\nrender_resolutions: ', render_resolutions.shape)
         render_bg_colors = torch.ones(N, render_cameras.shape[1], 1, device=self.device, dtype=torch.float32) * 1.
         
+        print()
         frames = []
         for i in range(0, render_cameras.shape[1], frame_size):
             frames.append(
@@ -215,6 +216,65 @@ class LRMInferrer(Inferrer):
                     gradio_codec=self.cfg.app_enabled,
                 )
 
+    def infer_relative_viewpoints(self, planes: torch.Tensor, frame_size: int, render_size: int, render_views: int, render_fps: int, dump_video_path: str): 
+
+
+
+        N = planes.shape[0]
+        render_cameras, reference_imagenames, base_image = self._render_cameras_relative(batch_size=N, device=self.device) 
+        # note sure what anchors or resolutions are
+        render_anchors = torch.zeros(N, render_cameras.shape[1], 2, device=self.device)
+        render_resolutions = torch.ones(N, render_cameras.shape[1], 1, device=self.device) * render_size
+        render_bg_colors = torch.ones(N, render_cameras.shape[1], 1, device=self.device, dtype=torch.float32) * 1.
+        
+
+        save_dir = self.cfg.relative_viewpoints_dir
+        os.makedirs(os.path.dirname(save_dir), exist_ok=True)
+
+        for i in range(0, render_cameras.shape[1], 1):
+            print(render_cameras[:, i:i+frame_size].shape, render_anchors[:, i:i+frame_size].shape, render_bg_colors[:, i:i+frame_size].shape)
+            # synthesizer outputs a dictionary with 
+            # images_rgb, images_depth, images_weight
+            i_render = self.model.synthesizer(
+                    planes=planes,
+                    cameras=render_cameras[:, i:i+frame_size],
+                    anchors=render_anchors[:, i:i+frame_size],
+                    resolutions=render_resolutions[:, i:i+frame_size],
+                    bg_colors=render_bg_colors[:, i:i+frame_size],
+                    # cameras=render_cameras[:, i],
+                    # anchors=render_anchors[:, i],
+                    # resolutions=render_resolutions[:],
+                    # bg_colors=render_bg_colors[:],
+                    region_size=render_size,
+                )
+
+            print(type(i_render['images_rgb']))
+            print(type(i_render['images_rgb'].cpu().detach().numpy()))
+            i_image = i_render['images_rgb'].cpu().detach().numpy()[0,0,:,:,:]
+            i_image = i_image.transpose(1,2,0)
+
+            i_image = i_image * 255
+            print('\n\n\nvalues', np.mean(i_image), i_image.min(), i_image.max())
+            i_image = i_image.astype(np.uint8)
+            i_image = Image.fromarray(i_image)
+            i_filename = base_image + '_fromviewpoint_' + reference_imagenames[i] + '.png'
+            i_image.save(os.path.join(save_dir, i_filename))
+
+        # os.makedirs(os.path.dirname(self.cfg.relative_viewpoints_dir), exist_ok=True)
+
+        # for i_index in range(len(frames)): 
+        #     i_image = Image.fromarray()
+        #     i_filename = base_image + '_fromviewpoint_' + reference_viewpoint + '.png'
+        #     i_image = Image.save(os.path.join(self.cfg.relative_viewpoints_dir, i_filename))
+        # for k, v in frames.items():
+        #     if k == 'images_rgb':
+        #         images_to_video(
+        #             images=v[0],
+        #             output_path=dump_video_path,
+        #             fps=render_fps,
+        #             gradio_codec=self.cfg.app_enabled,
+        #         )
+
     def infer_mesh(self, planes: torch.Tensor, mesh_size: int, mesh_thres: float, dump_mesh_path: str):
         grid_out = self.model.synthesizer.forward_grid(
             planes=planes,
@@ -235,6 +295,7 @@ class LRMInferrer(Inferrer):
         mesh.export(dump_mesh_path)
 
     def infer_single(self, image_path: str, source_cam_dist: float, export_video: bool, export_mesh: bool, dump_video_path: str, dump_mesh_path: str):
+        
         source_size = self.cfg.source_size
         render_size = self.cfg.render_size
         render_views = self.cfg.render_views
@@ -257,17 +318,28 @@ class LRMInferrer(Inferrer):
 
             results = {}
             if export_video:
-                frames = self.infer_video(planes, frame_size=frame_size, render_size=render_size, render_views=render_views, render_fps=render_fps, dump_video_path=dump_video_path)
-                results.update({
-                    'frames': frames,
-                })
+                #frames = self.infer_video(planes, frame_size=frame_size, render_size=render_size, render_views=render_views, render_fps=render_fps, dump_video_path=dump_video_path)
+                #results.update({
+                #    'frames': frames,
+                #})
+                pass 
+
             if export_mesh:
                 mesh = self.infer_mesh(planes, mesh_size=mesh_size, mesh_thres=mesh_thres, dump_mesh_path=dump_mesh_path)
                 results.update({
                     'mesh': mesh,
                 })
+            if self.cfg.infer_relative:
+                print('self.cfg.infer_relative')
+                viewpoints = self.infer_relative_viewpoints(planes, frame_size=frame_size, render_size=render_size, render_views=render_views, render_fps=render_fps, dump_video_path=dump_video_path) 
+                results.update({
+                    'images': viewpoints,
+                })
+
 
     def infer(self):
+
+        print('infer')
 
         image_paths = []
         if os.path.isfile(self.cfg.image_input):
@@ -284,6 +356,7 @@ class LRMInferrer(Inferrer):
         # alloc to each DDP worker
         image_paths = image_paths[self.accelerator.process_index::self.accelerator.num_processes]
 
+        print( image_paths )
         for image_path in tqdm(image_paths, disable=not self.accelerator.is_local_main_process):
 
             # prepare dump paths

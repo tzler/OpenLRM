@@ -168,8 +168,6 @@ def surrounding_views_linspace(n_views: int, radius: float = 2.0, height: float 
     assert n_views > 0
     assert radius > 0
 
-    print('\n\nself.cfg', cfg)
-
     theta = torch.linspace(-torch.pi / 2, 3 * torch.pi / 2, n_views, device=device)
     projected_radius = math.sqrt(radius ** 2 - height ** 2)
     x = torch.cos(theta) * projected_radius
@@ -181,9 +179,13 @@ def surrounding_views_linspace(n_views: int, radius: float = 2.0, height: float 
     extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
 
     print('\nsurrounding_views_linespace')
+    print('\nprojected radius: ', projected_radius)
     print('\nn_views', n_views)
     print('\npositions', camera_positions.shape)
+    print('\npositions examples: \n', camera_positions[0,:].round())
     print('\nextrinsics', extrinsics.shape)
+    print('\nextrinsics examples: \n', extrinsics[0,:,:].round())
+
     return extrinsics
 
 def relative_views(self, radius: float = 2.0, height: float = 0.8, device: torch.device = torch.device('cpu')):
@@ -191,46 +193,49 @@ def relative_views(self, radius: float = 2.0, height: float = 0.8, device: torch
     custom for tyler 
     ref: surrounding_views_linspace() 
     """
-    import pickle 
+    # default values from openLRM
+    projected_radius = math.sqrt(radius ** 2 - height ** 2)
     
+    # load dust3r generated views which are saved 
+    import pickle, os
+    import numpy as np
     imagepath = self.cfg.image_input
-    
     i_trial = imagepath.split('/')[-1].split('_image')[0]
-
-    print('\n\n', imagepath, imagepath)
-
-    i_trial = imagepath.split('/')[-1].split('_image')[0]
-
     _idx = int(imagepath.split('/')[-1].split('_')[3][-1])
 
-    ipath = '/content/gdrive/MyDrive/perirhinal_function/model_outputs/barense_cameras/%s.pickle'
+    _file = os.path.join(self.cfg.dustr_viewpoint_path, i_trial + '.pickle')
 
-    with open(ipath%i_trial, 'rb') as handle:
+    with open(_file, 'rb') as handle:
         camera_info = pickle.load(handle)
-
+           
+    # extract rotation matrices
     rotation_matrices = [i[:3,:3] for i in camera_info['poses']]
     rotation_relativeto0 = [rotation_matrices[_idx].T @ i for i in rotation_matrices]
 
-    translation_vecs = [i[:3,3] for i in camera_info['poses']]
-    translation_relativeto0 = [translation_vecs[_idx] - i for i in translation_vecs]
-    
-    print('\n\nDETERMINED RELATIVE CAMERA EXTRINSICS\n\n')
-    
-    n_views = 20
+    # extract xyz positions 
+    xyz_duster = np.array([i[:3,3] for i in camera_info['poses']])
+    xyz_duster_relative = np.array([xyz_duster[_idx] - i for i in xyz_duster])
 
-    theta = torch.linspace(-torch.pi / 2, 3 * torch.pi / 2, n_views, device=device)
-    projected_radius = math.sqrt(radius ** 2 - height ** 2)
-    x = torch.cos(theta) * projected_radius
-    y = torch.sin(theta) * projected_radius
-    z = torch.full((n_views,), height, device=device)
-    camera_positions = torch.stack([x, y, z], dim=1)
+    # compute rescale factor to make sure we're using the values needed by LRM
+    # should this be computed from relative or absolute values? my guess: absolute
+    max_duster = xyz_duster.flatten().max()
+    max_lrm = projected_radius
+    scaleby = max_lrm / max_duster
+    xyz_duster_scaled = np.array(xyz_duster) * scaleby
+
+    # format for openLRM scripts
+    x, y, z = xyz_duster_scaled[:,0], xyz_duster_scaled[:,1], xyz_duster_scaled[:,2]
+    x, y, z = torch.from_numpy(x), torch.from_numpy(y), torch.from_numpy(z)
+
+    # back to standard form 
+    camera_positions = torch.stack([x, y, z], dim=1).cuda() # added cuda()
     extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
 
     print('\nsurrounding_views_linespace')
-    print('\nn_views', n_views)
     print('\npositions', camera_positions.shape)
     print('\nextrinsics', extrinsics.shape)
-    return extrinsics
+
+    return extrinsics, camera_info['imagenames'], camera_info['imagenames'][_idx]
 
 def create_intrinsics(
     f: float,
