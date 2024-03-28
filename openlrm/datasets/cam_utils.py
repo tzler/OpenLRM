@@ -176,6 +176,8 @@ def surrounding_views_linspace(n_views: int, radius: float = 2.0, height: float 
 
     camera_positions = torch.stack([x, y, z], dim=1)
 
+    #print('camera_positions\n\n\n', camera_positions)
+
     extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
 
     print('\nsurrounding_views_linespace')
@@ -193,6 +195,9 @@ def relative_views(self, radius: float = 2.0, height: float = 0.8, device: torch
     custom for tyler 
     ref: surrounding_views_linspace() 
     """
+
+    print('\n relative_views')
+    
     # default values from openLRM
     projected_radius = math.sqrt(radius ** 2 - height ** 2)
     
@@ -203,11 +208,15 @@ def relative_views(self, radius: float = 2.0, height: float = 0.8, device: torch
     i_trial = imagepath.split('/')[-1].split('_image')[0]
     _idx = int(imagepath.split('/')[-1].split('_')[3][-1])
 
+    print('_idx', _idx)
+    
     _file = os.path.join(self.cfg.dustr_viewpoint_path, i_trial + '.pickle')
 
     with open(_file, 'rb') as handle:
         camera_info = pickle.load(handle)
-           
+
+    imagenames = [i[i.find('image'):-4] for i in camera_info['imagenames']]
+       
     # extract rotation matrices
     rotation_matrices = [i[:3,:3] for i in camera_info['poses']]
     rotation_relativeto0 = [rotation_matrices[_idx].T @ i for i in rotation_matrices]
@@ -221,21 +230,23 @@ def relative_views(self, radius: float = 2.0, height: float = 0.8, device: torch
     max_duster = xyz_duster.flatten().max()
     max_lrm = projected_radius
     scaleby = max_lrm / max_duster
-    xyz_duster_scaled = np.array(xyz_duster) * scaleby
+    xyz_scaled = np.array(xyz_duster_relative) * (scaleby/2)
 
     # format for openLRM scripts
-    x, y, z = xyz_duster_scaled[:,0], xyz_duster_scaled[:,1], xyz_duster_scaled[:,2]
+    x, y, z = xyz_scaled[:,0], xyz_scaled[:,1], xyz_scaled[:,2]
     x, y, z = torch.from_numpy(x), torch.from_numpy(y), torch.from_numpy(z)
+
+    # adjust again by the front facing relative position ...
+    #xyz_scaled = xyz_scaled + np.array([0, -2,  1]).astype(float)
+    x, y, z = x + 0, y + -2, z + 0 # one is a little too high for z!  
 
     # back to standard form 
     camera_positions = torch.stack([x, y, z], dim=1).cuda() # added cuda()
     extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
 
-    print('\nsurrounding_views_linespace')
-    print('\npositions', camera_positions.shape)
-    print('\nextrinsics', extrinsics.shape)
+    print('\npositions\n\n', camera_positions, '\n\n')
 
-    return extrinsics, camera_info['imagenames'], camera_info['imagenames'][_idx]
+    return extrinsics, imagenames, imagepath.split('/')[-1]
 
 def create_intrinsics(
     f: float,
