@@ -1,3 +1,4 @@
+# cam_utils.py 
 # Copyright (c) 2023-2024, Zexin He
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -230,7 +231,7 @@ def relative_views(self, radius: float = 2.0, height: float = 0.8, device: torch
     max_duster = xyz_duster.flatten().max()
     max_lrm = projected_radius
     scaleby = max_lrm / max_duster
-    xyz_scaled = np.array(xyz_duster_relative) * (scaleby/2)
+    xyz_scaled = np.array(xyz_duster_relative) * scaleby
 
     # format for openLRM scripts
     x, y, z = xyz_scaled[:,0], xyz_scaled[:,1], xyz_scaled[:,2]
@@ -256,6 +257,7 @@ def create_intrinsics(
     device: torch.device = torch.device('cpu'),
     ):
     """
+    add values from camera_info['intrinsics']
     return: (3, 2)
     """
     fx = fy = f
