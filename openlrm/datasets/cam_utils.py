@@ -183,15 +183,45 @@ def surrounding_views_linspace(n_views: int, radius: float = 2.0, height: float 
 
     extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
 
-    print('\nsurrounding_views_linespace')
-    print('\nprojected radius: ', projected_radius)
-    print('\nn_views', n_views)
-    print('\npositions', camera_positions.shape)
-    print('\npositions examples: \n', camera_positions[0,:].round())
-    print('\nextrinsics', extrinsics.shape)
-    print('\nextrinsics examples: \n', extrinsics[0,:,:].round())
+    # print('\nsurrounding_views_linespace')
+    # print('\nprojected radius: ', projected_radius)
+    # print('\nn_views', n_views)
+    # print('\npositions', camera_positions.shape)
+    # print('\npositions examples: \n', camera_positions[0,:].round())
+    # print('\nextrinsics', extrinsics.shape)
+    # print('\nextrinsics examples: \n', extrinsics[0,:,:].round())
 
     return extrinsics
+
+def create_intrinsics(
+    f: float,
+    c: float = None, 
+    cx: float = None, 
+    cy: float = None,
+    w: float = 1., 
+    h: float = 1.,
+    dtype: torch.dtype = torch.float32,
+    device: torch.device = torch.device('cpu'),
+    ):
+    """
+    add values from camera_info['intrinsics']
+    return: (3, 2)
+    """
+    fx = fy = f
+    if c is not None:
+        assert cx is None and cy is None, "c and cx/cy cannot be used together"
+        cx = cy = c
+    else:
+        assert cx is not None and cy is not None, "cx/cy must be provided when c is not provided"
+    fx, fy, cx, cy, w, h = fx/w, fy/h, cx/w, cy/h, 1., 1.
+    intrinsics = torch.tensor([
+        [fx, fy],
+        [cx, cy],
+        [w, h],
+    ], dtype=dtype, device=device)
+    return intrinsics
+
+# all tyler mods below
 
 def extract_dustr_info(self): 
 
@@ -233,7 +263,7 @@ def extract_dustr_info(self):
     return dustr 
 
 
-def relative_views(self, radius: float = 2.0, height: float = 0.8, device: torch.device = torch.device('cpu')):
+def relative_extrinsics(self, radius: float = 2.0, height: float = 0.8, device: torch.device = torch.device('cpu')):
     """
     custom for tyler 
     ref: surrounding_views_linspace() 
@@ -253,18 +283,18 @@ def relative_views(self, radius: float = 2.0, height: float = 0.8, device: torch
     ### WRONG ### WRONG ### WRONG ### WRONG ### WRONG ### WRONG ### WRONG 
     #compute rescale factor to make sure we're using the values needed by LRM
     #should this be computed from relative or absolute values? my guess: absolute
-    max_duster = dustr['xyz'].flatten().max()
-    max_lrm = projected_radius
-    scaleby = max_lrm / max_duster
-    x, y, z = x * scaleby, y * scaleby, z * scaleby
+    # max_duster = dustr['xyz'].flatten().max()
+    # max_lrm = projected_radius
+    # scaleby = max_lrm / max_duster
+    # x, y, z = x * scaleby, y * scaleby, z * scaleby
+
+    # # # manually determined by viewing openLRM visualizations
+    # origin = [0, -2, 0]
+    # # #  adjust position based on where openLRM camera viewing poses start from 
+    # x, y, z = x + origin[0], y + origin[1], z + origin[2] 
 
     # convert to torch 
     x, y, z = torch.from_numpy(x), torch.from_numpy(y), torch.from_numpy(z)
-
-    # manually determined by viewing openLRM visualizations
-    origin = [0, -2, 0]
-    #  adjust position based on where openLRM camera viewing poses start from 
-    x, y, z = x + origin[0], y + origin[1], z + origin[2] 
 
     # format for openLRM scripts
     camera_positions = torch.stack([x, y, z], dim=1).cuda() # added cuda()
@@ -277,50 +307,19 @@ def relative_views(self, radius: float = 2.0, height: float = 0.8, device: torch
     
     return extrinsics, imagenames, this_image 
 
-def create_relative_intrinsics(
-    dustr,  
-    w: float = 1., 
-    h: float = 1.,
-    dtype: torch.dtype = torch.float32,
-    device: torch.device = torch.device('cpu'),
-    ):
+def relative_intrinsics(self,  w: float = 1., h: float = 1., dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu'),):
     """
+    ref: create_intrinsics(
     add values from camera_info['intrinsics']
     return: (3, 2)
     """
-    fx  = dustr['fx']
+    # extract camera extrinsics for all images in this trial 
+    dustr = extract_dustr_info(self)
+
+    fx = dustr['fx']
     fy = dustr['fy']
     cx = dustr['cx']
     cy = dustr['cy']
-    fx, fy, cx, cy, w, h = fx/w, fy/h, cx/w, cy/h, 1., 1.
-    intrinsics = torch.tensor([
-        [fx, fy],
-        [cx, cy],
-        [w, h],
-    ], dtype=dtype, device=device)
-    return intrinsics
-
-
-def create_intrinsics(
-    f: float,
-    c: float = None, 
-    cx: float = None, 
-    cy: float = None,
-    w: float = 1., 
-    h: float = 1.,
-    dtype: torch.dtype = torch.float32,
-    device: torch.device = torch.device('cpu'),
-    ):
-    """
-    add values from camera_info['intrinsics']
-    return: (3, 2)
-    """
-    fx = fy = f
-    if c is not None:
-        assert cx is None and cy is None, "c and cx/cy cannot be used together"
-        cx = cy = c
-    else:
-        assert cx is not None and cy is not None, "cx/cy must be provided when c is not provided"
     fx, fy, cx, cy, w, h = fx/w, fy/h, cx/w, cy/h, 1., 1.
     intrinsics = torch.tensor([
         [fx, fy],

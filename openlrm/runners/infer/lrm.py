@@ -34,7 +34,7 @@ from openlrm.runners import REGISTRY_RUNNERS
 from openlrm.utils.video import images_to_video
 from openlrm.utils.hf_hub import wrap_model_hub
 # tyler adds 
-from openlrm.datasets.cam_utils import relative_views 
+from openlrm.datasets.cam_utils import relative_extrinsics, relative_intrinsics
 
 logger = get_logger(__name__)
 
@@ -160,23 +160,7 @@ class LRMInferrer(Inferrer):
         render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
         return render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
 
-    def _render_cameras_relative(self, batch_size: int = 1, device: torch.device = torch.device('cpu')):
-        
-        print('_render_cameras_relative() ')
-        # return: (N, M, D_cam_render)
-        render_camera_extrinsics, reference_images, base_image = relative_views(self, device=device)
 
-        #fx, fy = 
-        render_camera_intrinsics = create_intrinsics(
-            f=0.75,
-            c=0.5,
-            device=device,
-        ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
-
-        render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
-        render_cameras = render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
-
-        return render_cameras, reference_images, base_image
 
     def infer_planes(self, image: torch.Tensor, source_cam_dist: float):
         N = image.shape[0]
@@ -222,6 +206,23 @@ class LRMInferrer(Inferrer):
                     gradio_codec=self.cfg.app_enabled,
                 )
 
+    def _render_cameras_relative(self, batch_size: int = 1, device: torch.device = torch.device('cpu')):
+        
+        print('_render_cameras_relative() ')
+        # return: (N, M, D_cam_render)
+        render_camera_extrinsics, reference_images, base_image = relative_extrinsics(self, device=device)
+
+        render_camera_intrinsics = relative_intrinsics(self, 
+        #    f=0.75,
+        #    c=0.5,
+            device=device,
+        ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
+
+        render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
+        render_cameras = render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
+
+        return render_cameras, reference_images, base_image
+      
     def infer_relative_viewpoints(self, planes: torch.Tensor, frame_size: int, render_size: int, render_views: int, render_fps: int, dump_video_path: str): 
 
         N = planes.shape[0]
