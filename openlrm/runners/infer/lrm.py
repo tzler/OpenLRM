@@ -103,7 +103,7 @@ def parse_configs():
     assert cfg.model_name is not None, "model_name is required"
     if not os.environ.get('APP_ENABLED', None):
         assert cfg.image_input is not None, "image_input is required"
-        assert cfg.export_video or cfg.export_mesh, \
+        assert cfg.export_video or cfg.export_mesh or cfg.infer_relative, \
             "At least one of export_video or export_mesh should be True"
         cfg.app_enabled = False
     else:
@@ -161,15 +161,22 @@ class LRMInferrer(Inferrer):
         return render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
 
     def _render_cameras_relative(self, batch_size: int = 1, device: torch.device = torch.device('cpu')):
+        
+        print('_render_cameras_relative() ')
         # return: (N, M, D_cam_render)
         render_camera_extrinsics, reference_images, base_image = relative_views(self, device=device)
+
+        #fx, fy = 
         render_camera_intrinsics = create_intrinsics(
             f=0.75,
             c=0.5,
             device=device,
         ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
+
         render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
-        return render_cameras.unsqueeze(0).repeat(batch_size, 1, 1), reference_images, base_image
+        render_cameras = render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
+
+        return render_cameras, reference_images, base_image
 
     def infer_planes(self, image: torch.Tensor, source_cam_dist: float):
         N = image.shape[0]
@@ -182,15 +189,11 @@ class LRMInferrer(Inferrer):
         
         N = planes.shape[0]
 
-        render_views = 20 
-
         render_cameras = self._default_render_cameras(n_views=render_views, batch_size=N, device=self.device)
-        
         render_anchors = torch.zeros(N, render_cameras.shape[1], 2, device=self.device)
         render_resolutions = torch.ones(N, render_cameras.shape[1], 1, device=self.device) * render_size
         render_bg_colors = torch.ones(N, render_cameras.shape[1], 1, device=self.device, dtype=torch.float32) * 1.
         
-        print()
         frames = []
         for i in range(0, render_cameras.shape[1], frame_size):
             frames.append(
@@ -231,17 +234,14 @@ class LRMInferrer(Inferrer):
         render_bg_colors = torch.ones(N, render_cameras.shape[1], 1, device=self.device, dtype=torch.float32) * 1.
         
         save_dir = self.cfg.relative_viewpoints_dir
-        os.makedirs(os.path.dirname(save_dir), exist_ok=True)
+
+        print('save_dir', save_dir)
+        os.makedirs(save_dir, exist_ok=True)
 
         frames = [] 
         for i in range(0, render_cameras.shape[1], 1):
-            # print('\nsizes:\n\ncamera', render_cameras[:, i:i+frame_size].shape,
-            # '\n\nanchors', render_anchors[:, i:i+frame_size].shape, 
-            # '\n\nresolutions', render_resolutions[:, i:i+frame_size], 
-            # '\n\ncolors', render_bg_colors[:, i:i+frame_size])
             
-            # synthesizer outputs a dictionary with 
-            # images_rgb, images_depth, images_weight
+            # outputs a dictionary with: images_rgb, images_depth, images_weight
             i_render = self.model.synthesizer(
                     planes=planes,
                     cameras=render_cameras[:, i:i+frame_size],
@@ -262,7 +262,7 @@ class LRMInferrer(Inferrer):
             i_image = i_image * 255
             i_image = i_image.astype(np.uint8)
             i_image = Image.fromarray(i_image)
-            i_filename = base_image + '_fromviewpoint_' + reference_imagenames[i] + '.png'
+            i_filename = base_image[:-4] + '_fromviewpoint_' + reference_imagenames[i][:-4] + '.png'
             i_image.save(os.path.join(save_dir, i_filename))
 
                 # merge frames
@@ -271,12 +271,14 @@ class LRMInferrer(Inferrer):
             for k in frames[0].keys()
         }
         # dump
-        os.makedirs(os.path.dirname(dump_video_path), exist_ok=True)
+        #print('dump_video_path', dump_video_path, type(dump_video_path))
+        video_path = os.path.join( save_dir, '%s.mov'%base_image)
+        #os.makedirs(save_dir, exist_ok=True)
         for k, v in frames.items():
             if k == 'images_rgb':
                 images_to_video(
                     images=v[0],
-                    output_path=dump_video_path,
+                    output_path=video_path,
                     fps=render_fps,
                     gradio_codec=self.cfg.app_enabled,
                 )
@@ -315,6 +317,9 @@ class LRMInferrer(Inferrer):
         # prepare image: [1, C_img, H_img, W_img], 0-1 scale
         image = torch.from_numpy(np.array(Image.open(image_path))).to(self.device)
         image = image.permute(2, 0, 1).unsqueeze(0) / 255.0
+
+        print('image', image.shape )
+
         if image.shape[1] == 4:  # RGBA
             image = image[:, :3, ...] * image[:, 3:, ...] + (1 - image[:, 3:, ...])
         image = torch.nn.functional.interpolate(image, size=(source_size, source_size), mode='bicubic', align_corners=True)
@@ -363,7 +368,8 @@ class LRMInferrer(Inferrer):
         # alloc to each DDP worker
         image_paths = image_paths[self.accelerator.process_index::self.accelerator.num_processes]
 
-        print( image_paths )
+        print('image_paths', image_paths)
+
         for image_path in tqdm(image_paths, disable=not self.accelerator.is_local_main_process):
 
             # prepare dump paths

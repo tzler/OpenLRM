@@ -16,6 +16,8 @@
 
 import math
 import torch
+import pickle, os
+import numpy as np
 
 """
 R: (N, 3, 3)
@@ -191,68 +193,121 @@ def surrounding_views_linspace(n_views: int, radius: float = 2.0, height: float 
 
     return extrinsics
 
+def extract_dustr_info(self): 
+
+    # determine which trial this image is associated with 
+    i_trial = self.cfg.image_input.split('/')[-1].split('_image')[0]
+    
+    # determine path to dust3r generated viewpoints of trial images 
+    _file = os.path.join(self.cfg.dustr_viewpoint_path, i_trial + '.pickle')
+    
+    # load dust3r generated data 
+    with open(_file, 'rb') as handle:
+        dustr = pickle.load(handle)
+    
+    # determine name of all images in this trial
+    imagenames = [i[i.find('image'):-4] for i in dustr['imagenames']]
+    
+    # determine the index of this trial 
+    _idx = int(self.cfg.image_input.split('/')[-1].split('_')[3][-1])
+
+    # extract rotation matrices for cameras from all images in this trial
+    rotation = [i[:3,:3] for i in dustr['poses']]
+    
+    # determine rotation matrix relative to the camera pose from this image
+    dustr['rotation'] = [rotation[_idx].T @ i for i in rotation]
+
+    # extract xyz positions for cameras from all images in this trial
+    xyz_duster = np.array([i[:3,3] for i in dustr['poses']])
+
+    #  determine xyz positions relative to the camera from this image 
+    dustr['xyz'] = np.array([xyz_duster[_idx] - i for i in xyz_duster])
+
+    dustr['this_image'] = self.cfg.image_input.split('/')[-1][:-4]
+
+    dustr['fx'] = dustr['intrinsics'][0][0,0]
+    dustr['fy'] = dustr['intrinsics'][0][1,1]
+    dustr['cx'] = dustr['intrinsics'][0][0,2]
+    dustr['cy'] = dustr['intrinsics'][0][1,2]
+
+    return dustr 
+
+
 def relative_views(self, radius: float = 2.0, height: float = 0.8, device: torch.device = torch.device('cpu')):
     """
     custom for tyler 
     ref: surrounding_views_linspace() 
     """
 
-    print('\n relative_views')
+    print('relative_views')
+    
+    # extract camera extrinsics for all images in this trial 
+    dustr = extract_dustr_info(self)
     
     # default values from openLRM
     projected_radius = math.sqrt(radius ** 2 - height ** 2)
+
+    # extract into vector format
+    x, y, z = dustr['xyz'][:,0], dustr['xyz'][:,1], dustr['xyz'][:,2]
     
-    # load dust3r generated views which are saved 
-    import pickle, os
-    import numpy as np
-    imagepath = self.cfg.image_input
-    i_trial = imagepath.split('/')[-1].split('_image')[0]
-    _idx = int(imagepath.split('/')[-1].split('_')[3][-1])
-
-    print('_idx', _idx)
-    
-    _file = os.path.join(self.cfg.dustr_viewpoint_path, i_trial + '.pickle')
-
-    with open(_file, 'rb') as handle:
-        camera_info = pickle.load(handle)
-
-    imagenames = [i[i.find('image'):-4] for i in camera_info['imagenames']]
-       
-    # extract rotation matrices
-    rotation_matrices = [i[:3,:3] for i in camera_info['poses']]
-    rotation_relativeto0 = [rotation_matrices[_idx].T @ i for i in rotation_matrices]
-
-    # extract xyz positions 
-    xyz_duster = np.array([i[:3,3] for i in camera_info['poses']])
-    xyz_duster_relative = np.array([xyz_duster[_idx] - i for i in xyz_duster])
-
-    # compute rescale factor to make sure we're using the values needed by LRM
-    # should this be computed from relative or absolute values? my guess: absolute
-    max_duster = xyz_duster.flatten().max()
+    ### WRONG ### WRONG ### WRONG ### WRONG ### WRONG ### WRONG ### WRONG 
+    #compute rescale factor to make sure we're using the values needed by LRM
+    #should this be computed from relative or absolute values? my guess: absolute
+    max_duster = dustr['xyz'].flatten().max()
     max_lrm = projected_radius
     scaleby = max_lrm / max_duster
-    xyz_scaled = np.array(xyz_duster_relative) * scaleby
+    x, y, z = x * scaleby, y * scaleby, z * scaleby
 
-    # format for openLRM scripts
-    x, y, z = xyz_scaled[:,0], xyz_scaled[:,1], xyz_scaled[:,2]
+    # convert to torch 
     x, y, z = torch.from_numpy(x), torch.from_numpy(y), torch.from_numpy(z)
 
-    # adjust again by the front facing relative position ...
-    #xyz_scaled = xyz_scaled + np.array([0, -2,  1]).astype(float)
-    x, y, z = x + 0, y + -2, z + 0 # one is a little too high for z!  
+    # manually determined by viewing openLRM visualizations
+    origin = [0, -2, 0]
+    #  adjust position based on where openLRM camera viewing poses start from 
+    x, y, z = x + origin[0], y + origin[1], z + origin[2] 
 
-    # back to standard form 
+    # format for openLRM scripts
     camera_positions = torch.stack([x, y, z], dim=1).cuda() # added cuda()
+    
+    # generate camera extrinsics in the correct format
     extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
 
-    print('\npositions\n\n', camera_positions, '\n\n')
+    imagenames = [i[i.find('image'):-4] for i in dustr['imagenames']]
+    this_image = self.cfg.image_input.split('/')[-1]
+    
+    return extrinsics, imagenames, this_image 
 
-    return extrinsics, imagenames, imagepath.split('/')[-1]
+def create_relative_intrinsics(
+    dustr,  
+    w: float = 1., 
+    h: float = 1.,
+    dtype: torch.dtype = torch.float32,
+    device: torch.device = torch.device('cpu'),
+    ):
+    """
+    add values from camera_info['intrinsics']
+    return: (3, 2)
+    """
+    fx  = dustr['fx']
+    fy = dustr['fy']
+    cx = dustr['cx']
+    cy = dustr['cy']
+    fx, fy, cx, cy, w, h = fx/w, fy/h, cx/w, cy/h, 1., 1.
+    intrinsics = torch.tensor([
+        [fx, fy],
+        [cx, cy],
+        [w, h],
+    ], dtype=dtype, device=device)
+    return intrinsics
+
 
 def create_intrinsics(
     f: float,
-    c: float = None, cx: float = None, cy: float = None,
-    w: float = 1., h: float = 1.,
+    c: float = None, 
+    cx: float = None, 
+    cy: float = None,
+    w: float = 1., 
+    h: float = 1.,
     dtype: torch.dtype = torch.float32,
     device: torch.device = torch.device('cpu'),
     ):
