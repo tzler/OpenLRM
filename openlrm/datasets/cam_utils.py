@@ -288,9 +288,9 @@ def relative_extrinsics(self, radius: float = 2.0, height: float = 0.8, device: 
     # scaleby = max_lrm / max_duster
     # x, y, z = x * scaleby, y * scaleby, z * scaleby
 
-    # # # manually determined by viewing openLRM visualizations
+    # # # # manually determined by viewing openLRM visualizations
     # origin = [0, -2, 0]
-    # # #  adjust position based on where openLRM camera viewing poses start from 
+    # # # #  adjust position based on where openLRM camera viewing poses start from 
     # x, y, z = x + origin[0], y + origin[1], z + origin[2] 
 
     # convert to torch 
@@ -320,6 +320,9 @@ def relative_intrinsics(self,  w: float = 1., h: float = 1., dtype: torch.dtype 
     fy = dustr['fy']
     cx = dustr['cx']
     cy = dustr['cy']
+    h  = dustr['masks'][0].shape[1] # 100#cy * 2 #1000#
+    w  = dustr['masks'][0].shape[0] # 400#cx * 2 #1000#
+
     fx, fy, cx, cy, w, h = fx/w, fy/h, cx/w, cy/h, 1., 1.
     intrinsics = torch.tensor([
         [fx, fy],
