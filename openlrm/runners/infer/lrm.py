@@ -206,15 +206,23 @@ class LRMInferrer(Inferrer):
 
     def _render_cameras_relative(self, batch_size: int = 1, device: torch.device = torch.device('cpu')):
         
-        print('_render_cameras_relative() ')
+        print('_render_cameras_relative() using default intrinsics')
+        
+        LRM_INTRINSICS = True
+        
         # return: (N, M, D_cam_render)
         render_camera_extrinsics, reference_images, base_image = relative_extrinsics(self, device=device)
 
-        render_camera_intrinsics = relative_intrinsics(self, 
-        #    f=0.75,
-        #    c=0.5,
+        if LRM_INTRINSICS: 
+            render_camera_intrinsics = create_intrinsics(
+                f=0.75,
+                c=0.5,
+                device=device,
+            ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
+        else: 
+            render_camera_intrinsics = relative_intrinsics(self, 
             device=device,
-        ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
+            ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
 
         render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
         render_cameras = render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
@@ -225,16 +233,12 @@ class LRMInferrer(Inferrer):
 
         N = planes.shape[0]
         render_cameras, reference_imagenames, base_image = self._render_cameras_relative(batch_size=N, device=self.device) 
-        # note sure what anchors or resolutions are
+        # tyler: note sure what anchors are yet 
         render_anchors = torch.zeros(N, render_cameras.shape[1], 2, device=self.device)
-        # modified 
-        #render_anchors = torch.zeros(N, render_cameras.shape[1], 1, device=self.device)
         render_resolutions = torch.ones(N, render_cameras.shape[1], 1, device=self.device) * render_size
         render_bg_colors = torch.ones(N, render_cameras.shape[1], 1, device=self.device, dtype=torch.float32) * 1.
         
         save_dir = self.cfg.relative_viewpoints_dir
-
-        print('save_dir', save_dir)
         os.makedirs(save_dir, exist_ok=True)
 
         frames = [] 
@@ -247,10 +251,6 @@ class LRMInferrer(Inferrer):
                     anchors=render_anchors[:, i:i+frame_size],
                     resolutions=render_resolutions[:, i:i+frame_size],
                     bg_colors=render_bg_colors[:, i:i+frame_size],
-                    # cameras=render_cameras[:, i],
-                    # anchors=render_anchors[:, i],
-                    # resolutions=render_resolutions[:, i],
-                    # bg_colors=render_bg_colors[:, i],
                     region_size=render_size,
                 )
             frames.append(i_render)
@@ -261,18 +261,15 @@ class LRMInferrer(Inferrer):
             i_image = i_image * 255
             i_image = i_image.astype(np.uint8)
             i_image = Image.fromarray(i_image)
-            i_filename = base_image[:-4] + '_fromviewpoint_' + reference_imagenames[i][:-4] + '.png'
-            i_image.save(os.path.join(save_dir, i_filename))
+            i_file = 'MODELFROM_' + base_image[:-4] + '_WITHVIEWPOINTFROM_' + reference_imagenames[i][:-4] + '.png'
+            i_image.save(os.path.join(save_dir, i_file))
 
-                # merge frames
+        # merge frames
         frames = {
             k: torch.cat([r[k] for r in frames], dim=1)
             for k in frames[0].keys()
         }
-        # dump
-        #print('dump_video_path', dump_video_path, type(dump_video_path))
         video_path = os.path.join( save_dir, '%s.mov'%base_image)
-        #os.makedirs(save_dir, exist_ok=True)
         for k, v in frames.items():
             if k == 'images_rgb':
                 images_to_video(

@@ -223,6 +223,67 @@ def create_intrinsics(
 
 # all tyler mods below
 
+def dust3r_to_lrm_coordinates(dust3r, reference_camera_idx = 0, lrm_point = [0, -2, 0]): 
+  """ NOT USING THIS FUNCTION BUT KEEPING FOR REFERENCE —— ALMOST WORKING"""
+  # get origin for this trial 
+  i_origin = dust3r['origin']
+
+  # get translation vectors for each camera
+  i_xyz = [i[:3,3] for i in dust3r['poses']]
+
+  # translate cameras relative to origin 
+  xyz_relative_to_origin = [i - i_origin for i in i_xyz]
+
+  # set refernce point for LRM (determined from data)
+  lrm_point = [0, -2, 0]
+
+  # determine reference camera norm (ie radius)
+  r_camera = np.linalg.norm(xyz_relative_to_origin[reference_camera_idx])
+
+  # determine lrm camera norm (ie radius)
+  r_lrm_point = np.linalg.norm(lrm_point)
+
+  # determine scaling factor 
+  scaleby = r_lrm_point/ r_camera 
+
+  # scale dust3r cameras 
+  xyz_rescaled = [i * scaleby for i in xyz_relative_to_origin]
+
+  # determine translation needed for reference point 
+  reference_translation = lrm_point - xyz_rescaled[reference_camera_idx]
+
+  # translate all points 
+  xyz_rescaled_translated = [i + reference_translation for i in xyz_rescaled]
+
+  # # determine rotation needed for reference point 
+  rotation_matrix = find_rotation(xyz_rescaled[reference_camera_idx], lrm_point)
+
+  # Apply rotation to all points
+  xyz_rescaled_rotated = [rotate_point(i,rotation_matrix) for i in xyz_rescaled]
+
+  return i_xyz, xyz_relative_to_origin, xyz_rescaled, xyz_rescaled_translated, xyz_rescaled_rotated
+
+def find_rotation(point1, point2):
+
+    # Step 1: Find the axis of rotation
+    u = np.cross(point1, point2).astype(np.float64)
+    u /= np.linalg.norm(u).astype(np.float64)
+
+    # Step 2: Find the angle of rotation
+    theta = np.arccos(np.dot(point1, point2))
+
+    # Step 3: Construct the rotation matrix
+    K = np.array([[0, -u[2], u[1]],
+                  [u[2], 0, -u[0]],
+                  [-u[1], u[0], 0]])
+
+    R = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * np.dot(K, K)
+
+    return R
+
+def rotate_point(point, rotation_matrix):
+    return np.dot(rotation_matrix, point)
+
 def extract_dustr_info(self): 
 
     # determine which trial this image is associated with 
@@ -233,35 +294,67 @@ def extract_dustr_info(self):
     
     # load dust3r generated data 
     with open(_file, 'rb') as handle:
-        dustr = pickle.load(handle)
+        dust3r = pickle.load(handle)
     
     # determine name of all images in this trial
-    imagenames = [i[i.find('image'):-4] for i in dustr['imagenames']]
+    imagenames = [i[i.find('image'):-4] for i in dust3r['imagenames']]
     
     # determine the index of this trial 
     _idx = int(self.cfg.image_input.split('/')[-1].split('_')[3][-1])
 
     # extract rotation matrices for cameras from all images in this trial
-    rotation = [i[:3,:3] for i in dustr['poses']]
+    rotation = [i[:3,:3] for i in dust3r['poses']]
     
     # determine rotation matrix relative to the camera pose from this image
-    dustr['rotation'] = [rotation[_idx].T @ i for i in rotation]
+    dust3r['rotation'] = [rotation[_idx].T @ i for i in rotation]
 
-    # extract xyz positions for cameras from all images in this trial
-    xyz_duster = np.array([i[:3,3] for i in dustr['poses']])
+    # get origin for this trial 
+    i_origin = dust3r['origin']
 
-    #  determine xyz positions relative to the camera from this image 
-    dustr['xyz'] = np.array([xyz_duster[_idx] - i for i in xyz_duster])
+    # get translation vectors for each camera
+    xyz = [i[:3,3] for i in dust3r['poses']]
 
-    dustr['this_image'] = self.cfg.image_input.split('/')[-1][:-4]
+    # translate cameras relative to origin 
+    xyz_relative_to_origin = [i - i_origin for i in xyz]
 
-    dustr['fx'] = dustr['intrinsics'][0][0,0]
-    dustr['fy'] = dustr['intrinsics'][0][1,1]
-    dustr['cx'] = dustr['intrinsics'][0][0,2]
-    dustr['cy'] = dustr['intrinsics'][0][1,2]
+    # set refernce point for LRM (determined from data)
+    lrm_point = [0, -2, 0]
 
-    return dustr 
+    # determine reference camera norm (ie radius)
+    r_camera = np.linalg.norm(xyz_relative_to_origin[_idx])
 
+    # determine lrm camera norm (ie radius)
+    r_lrm_point = np.linalg.norm(lrm_point)
+
+    # determine scaling factor 
+    scaleby = r_lrm_point/ r_camera 
+
+    # scale dust3r cameras 
+    xyz_rescaled = [i * scaleby for i in xyz_relative_to_origin]
+
+    # ALMOST RIGHT BUT STILL OFF 
+    # determine rotation needed for reference point 
+    rotation_matrix = find_rotation(xyz_rescaled[_idx], lrm_point)
+
+    # Apply rotation to all points
+    xyz_rescaled_rotated = [rotate_point(i, rotation_matrix) for i in xyz_rescaled]
+
+    # both are wrong but let's visualive them
+    dust3r['xyz'] = np.array( xyz_rescaled_rotated ) 
+    
+    # intrinsics: focal lendth x     
+    dust3r['fx'] = dust3r['intrinsics'][0][0,0]
+    # intrinsics: focal length y 
+    dust3r['fy'] = dust3r['intrinsics'][0][1,1]
+    # intrinsics: center of x 
+    dust3r['cx'] = dust3r['intrinsics'][0][0,2]
+    # intrinsics: center of y 
+    dust3r['cy'] = dust3r['intrinsics'][0][1,2]
+
+    # for reference later
+    dust3r['this_image'] = self.cfg.image_input.split('/')[-1][:-4]
+
+    return dust3r 
 
 def relative_extrinsics(self, radius: float = 2.0, height: float = 0.8, device: torch.device = torch.device('cpu')):
     """
@@ -273,37 +366,25 @@ def relative_extrinsics(self, radius: float = 2.0, height: float = 0.8, device: 
     
     # extract camera extrinsics for all images in this trial 
     dustr = extract_dustr_info(self)
+
+    imagenames = [i[i.find('image'):-4] for i in dustr['imagenames']]
+    
+    this_image = self.cfg.image_input.split('/')[-1]
     
     # default values from openLRM
     projected_radius = math.sqrt(radius ** 2 - height ** 2)
 
     # extract into vector format
     x, y, z = dustr['xyz'][:,0], dustr['xyz'][:,1], dustr['xyz'][:,2]
-    
-    ### WRONG ### WRONG ### WRONG ### WRONG ### WRONG ### WRONG ### WRONG 
-    #compute rescale factor to make sure we're using the values needed by LRM
-    #should this be computed from relative or absolute values? my guess: absolute
-    # max_duster = dustr['xyz'].flatten().max()
-    # max_lrm = projected_radius
-    # scaleby = max_lrm / max_duster
-    # x, y, z = x * scaleby, y * scaleby, z * scaleby
-
-    # # # # manually determined by viewing openLRM visualizations
-    # origin = [0, -2, 0]
-    # # # #  adjust position based on where openLRM camera viewing poses start from 
-    # x, y, z = x + origin[0], y + origin[1], z + origin[2] 
 
     # convert to torch 
     x, y, z = torch.from_numpy(x), torch.from_numpy(y), torch.from_numpy(z)
 
-    # format for openLRM scripts
-    camera_positions = torch.stack([x, y, z], dim=1).cuda() # added cuda()
+    # forma't for openLRM scripts
+    camera_positions = torch.stack([x.float(), y.float(), z.float()], dim=1).cuda() # added cuda()
     
     # generate camera extrinsics in the correct format
     extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
-
-    imagenames = [i[i.find('image'):-4] for i in dustr['imagenames']]
-    this_image = self.cfg.image_input.split('/')[-1]
     
     return extrinsics, imagenames, this_image 
 
