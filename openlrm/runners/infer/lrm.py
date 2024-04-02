@@ -158,8 +158,6 @@ class LRMInferrer(Inferrer):
         render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
         return render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
 
-
-
     def infer_planes(self, image: torch.Tensor, source_cam_dist: float):
         N = image.shape[0]
         source_camera = self._default_source_camera(dist_to_center=source_cam_dist, batch_size=N, device=self.device)
@@ -218,13 +216,13 @@ class LRMInferrer(Inferrer):
                 f=0.75,
                 c=0.5,
                 device=device,
-            ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
+              ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
         else: 
-            render_camera_intrinsics = relative_intrinsics(self, 
-            device=device,
-            ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
+            render_camera_intrinsics = relative_intrinsics(self, device=device,
+              ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
 
         render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
+        
         render_cameras = render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
 
         return render_cameras, reference_images, base_image

@@ -40,6 +40,7 @@ def compose_extrinsic_RT(RT: torch.Tensor):
     """
     Compose the standard form extrinsic matrix from RT.
     Batched I/O.
+    
     """
     return torch.cat([
         RT,
@@ -119,6 +120,7 @@ def build_camera_standard(RT: torch.Tensor, intrinsics: torch.Tensor):
     """
     RT: (N, 3, 4)
     intrinsics: (N, 3, 2), [[fx, fy], [cx, cy], [width, height]]
+    RT = render_camera_extrinsics
     """
     E = compose_extrinsic_RT(RT)
     fx, fy, cx, cy = get_normalized_camera_intrinsics(intrinsics)
@@ -157,7 +159,13 @@ def center_looking_at_camera_pose(
     x_axis = x_axis / x_axis.norm(dim=-1, keepdim=True)
     y_axis = torch.cross(z_axis, x_axis)
     y_axis = y_axis / y_axis.norm(dim=-1, keepdim=True)
+
+    print('axes',z_axis.shape, '\n', z_axis.round() )
+
     extrinsics = torch.stack([x_axis, y_axis, z_axis, camera_position], dim=-1)
+
+    #print('extrinsics.shape:', extrinsics.shape, '\nextrinsics:', extrinsics)
+
     return extrinsics
 
 
@@ -263,28 +271,71 @@ def dust3r_to_lrm_coordinates(dust3r, reference_camera_idx = 0, lrm_point = [0, 
 
   return i_xyz, xyz_relative_to_origin, xyz_rescaled, xyz_rescaled_translated, xyz_rescaled_rotated
 
-def find_rotation(point1, point2):
+# from chatGPT
+# def find_rotation(point1, point2):
 
-    # Step 1: Find the axis of rotation
-    u = np.cross(point1, point2).astype(np.float64)
-    u /= np.linalg.norm(u).astype(np.float64)
+#     # Step 1: Find the axis of rotation
+#     u = np.cross(point1, point2).astype(np.float64)
+#     u /= np.linalg.norm(u).astype(np.float64)
 
-    # Step 2: Find the angle of rotation
-    theta = np.arccos(np.dot(point1, point2))
+#     # Step 2: Find the angle of rotation
+#     theta = np.arccos(np.dot(point1, point2))
 
-    # Step 3: Construct the rotation matrix
-    K = np.array([[0, -u[2], u[1]],
-                  [u[2], 0, -u[0]],
-                  [-u[1], u[0], 0]])
+#     # Step 3: Construct the rotation matrix
+#     K = np.array([[0, -u[2], u[1]],
+#                   [u[2], 0, -u[0]],
+#                   [-u[1], u[0], 0]])
 
-    R = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * np.dot(K, K)
+#     R = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * np.dot(K, K)
 
+#     return R
+
+# from claude 
+def find_rotation(p0, p1):
+    """
+    Compute the rotation matrix that rotates vector p1 onto vector p0.
+    
+    Args:
+        p0 (numpy.ndarray): The target vector (3x1).
+        p1 (numpy.ndarray): The vector to be rotated (3x1).
+        
+    Returns:
+        numpy.ndarray: The rotation matrix (3x3).
+    """
+    # Normalize the vectors
+    p0 = p0 / np.linalg.norm(p0)
+    p1 = p1 / np.linalg.norm(p1)
+    
+    # Compute the cosine of the angle between the vectors
+    cos_angle = np.dot(p0, p1)
+    
+    # If the vectors are already aligned, return the identity matrix
+    if np.isclose(cos_angle, 1.0):
+        return np.eye(3)
+    
+    # Compute the cross product to get the rotation axis
+    rotation_axis = np.cross(p0, p1)
+    
+    # Compute the sine of the angle between the vectors
+    sin_angle = np.linalg.norm(rotation_axis)
+    
+    # Normalize the rotation axis
+    rotation_axis /= sin_angle
+    
+    # Compute the skew-symmetric matrix of the rotation axis
+    skew_matrix = np.array([[0, -rotation_axis[2], rotation_axis[1]],
+                             [rotation_axis[2], 0, -rotation_axis[0]],
+                             [-rotation_axis[1], rotation_axis[0], 0]])
+    
+    # Compute the rotation matrix using Rodrigues' rotation formula
+    R = np.eye(3) + sin_angle * skew_matrix + (1 - cos_angle) * np.dot(skew_matrix, skew_matrix)
+    
     return R
 
 def rotate_point(point, rotation_matrix):
     return np.dot(rotation_matrix, point)
 
-def extract_dustr_info(self): 
+def extract_dustr_info(self, _rescale='all'): 
 
     # determine which trial this image is associated with 
     i_trial = self.cfg.image_input.split('/')[-1].split('_image')[0]
@@ -320,34 +371,50 @@ def extract_dustr_info(self):
     # set refernce point for LRM (determined from data)
     lrm_point = [0, -2, 0]
 
-    # determine reference camera norm (ie radius)
-    r_camera = np.linalg.norm(xyz_relative_to_origin[_idx])
-
     # determine lrm camera norm (ie radius)
     r_lrm_point = np.linalg.norm(lrm_point)
+  
+    # option to keep dust3r's relative distance from origin or make it uniform 
+    if _rescale=='single': 
 
-    # determine scaling factor 
-    scaleby = r_lrm_point/ r_camera 
+        # determine reference camera norm (ie radius)
+        r_camera = np.linalg.norm(xyz_relative_to_origin[_idx])
 
-    # scale dust3r cameras 
-    xyz_rescaled = [i * scaleby for i in xyz_relative_to_origin]
+        # determine scaling factor 
+        scaleby = r_lrm_point/ r_camera 
 
-    # ALMOST RIGHT BUT STILL OFF 
+        # scale dust3r cameras 
+        xyz_rescaled = [i * scaleby for i in xyz_relative_to_origin]
+
+    if _rescale=='all':
+        
+        rs = [np.linalg.norm(xyz_relative_to_origin[i]) for i in [0,1,2,3]]
+
+        _scale = [r_lrm_point/rs[i] for i in range(len(xyz))]
+
+        # scale dust3r cameras 
+        xyz_rescaled = [xyz_relative_to_origin[i] * _scale[i] for i in [0,1,2,3]]
+
     # determine rotation needed for reference point 
     rotation_matrix = find_rotation(xyz_rescaled[_idx], lrm_point)
 
     # Apply rotation to all points
     xyz_rescaled_rotated = [rotate_point(i, rotation_matrix) for i in xyz_rescaled]
 
+    print('FINAL_CAMERA_POSITION', [i.round(2) for i in xyz_rescaled_rotated[_idx]])
+
     # both are wrong but let's visualive them
     dust3r['xyz'] = np.array( xyz_rescaled_rotated ) 
     
     # intrinsics: focal lendth x     
     dust3r['fx'] = dust3r['intrinsics'][0][0,0]
+    
     # intrinsics: focal length y 
     dust3r['fy'] = dust3r['intrinsics'][0][1,1]
+    
     # intrinsics: center of x 
     dust3r['cx'] = dust3r['intrinsics'][0][0,2]
+    
     # intrinsics: center of y 
     dust3r['cy'] = dust3r['intrinsics'][0][1,2]
 
@@ -383,7 +450,8 @@ def relative_extrinsics(self, radius: float = 2.0, height: float = 0.8, device: 
     # forma't for openLRM scripts
     camera_positions = torch.stack([x.float(), y.float(), z.float()], dim=1).cuda() # added cuda()
     
-    # generate camera extrinsics in the correct format
+    # generate camera extrinsics in the correct format 
+    # PROBABLY EDIT THIS FUNCTION TO INCORPORATE DUST3R ROTATIONS 
     extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
     
     return extrinsics, imagenames, this_image 
