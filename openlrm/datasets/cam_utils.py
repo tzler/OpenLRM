@@ -160,10 +160,10 @@ def center_looking_at_camera_pose(
     y_axis = torch.cross(z_axis, x_axis)
     y_axis = y_axis / y_axis.norm(dim=-1, keepdim=True)
 
-    print('axes',z_axis.shape, '\n', z_axis.round() )
+    #print('axes',z_axis.shape, '\n', z_axis.round() )
 
     extrinsics = torch.stack([x_axis, y_axis, z_axis, camera_position], dim=-1)
-
+    
     #print('extrinsics.shape:', extrinsics.shape, '\nextrinsics:', extrinsics)
 
     return extrinsics
@@ -353,11 +353,7 @@ def extract_dustr_info(self, _rescale='all'):
     # determine the index of this trial 
     _idx = int(self.cfg.image_input.split('/')[-1].split('_')[3][-1])
 
-    # extract rotation matrices for cameras from all images in this trial
-    rotation = [i[:3,:3] for i in dust3r['poses']]
-    
-    # determine rotation matrix relative to the camera pose from this image
-    dust3r['rotation'] = [rotation[_idx].T @ i for i in rotation]
+    ########################### FIRST: THE TRANSLATION VENCTOR    
 
     # get origin for this trial 
     i_origin = dust3r['origin']
@@ -401,11 +397,44 @@ def extract_dustr_info(self, _rescale='all'):
     # Apply rotation to all points
     xyz_rescaled_rotated = [rotate_point(i, rotation_matrix) for i in xyz_rescaled]
 
-    print('FINAL_CAMERA_POSITION', [i.round(2) for i in xyz_rescaled_rotated[_idx]])
-
-    # both are wrong but let's visualive them
+    # final translated, rescaled, and rotated xyz position 
+    
     dust3r['xyz'] = np.array( xyz_rescaled_rotated ) 
     
+    ########################### SECOND: THE ROTATION VECTOR    
+
+    # extract rotation matrices for cameras from all images in this trial
+    
+    rotation = [i[:3,:3] for i in dust3r['poses']]
+
+    for i_camera in range(len(xyz)):
+
+        camera_rot = rotation[i_camera]
+
+        new_camera_pos = dust3r['xyz'][i_camera]
+
+        # NO CLUE JUST TRYING TO SEE IF THIS WORKS :/ 
+        # Compute the vector pointing from the new camera position to the origin
+        look_vector = -new_camera_pos
+
+        # Create a rotation matrix that aligns the -Z axis with the look vector
+        look_at = np.array([0, 0, -1])  # -Z axis
+        rotation_vector = np.cross(look_at, look_vector)
+        rotation_angle = np.arccos(np.dot(look_at, look_vector) / (np.linalg.norm(look_at) * np.linalg.norm(look_vector)))
+        rotation_matrix = np.eye(3)
+
+        if np.linalg.norm(rotation_vector) > 0:
+            rotation_matrix = np.eye(3) + np.sin(rotation_angle) * np.cross(np.eye(3), rotation_vector / np.linalg.norm(rotation_vector)) + (1 - np.cos(rotation_angle)) * np.square(rotation_vector / np.linalg.norm(rotation_vector))
+
+        # Update the camera's rotation matrix
+        new_camera_rot = np.dot(rotation_matrix, camera_rot)
+
+        print( 'old \n', dust3r['poses'][i_camera][:3,:3].round(2))
+        dust3r['poses'][i_camera][:3,:3] = new_camera_rot
+        print( 'new \n', dust3r['poses'][i_camera][:3,:3].round(2))
+    
+    dust3r['rotation'] = np.array( [i[:3,:3] for i in dust3r['poses']] ) 
+
     # intrinsics: focal lendth x     
     dust3r['fx'] = dust3r['intrinsics'][0][0,0]
     
@@ -453,6 +482,18 @@ def relative_extrinsics(self, radius: float = 2.0, height: float = 0.8, device: 
     # generate camera extrinsics in the correct format 
     # PROBABLY EDIT THIS FUNCTION TO INCORPORATE DUST3R ROTATIONS 
     extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
+    # which basically stacks the translation coordinates onto a 3x3: 
+    # extrinsics = torch.stack([x_axis, y_axis, z_axis, camera_position], dim=-1)
+    # which is equivalent to 
+    ### A = torch.tensor(np.array(dustr['rotation']), dtype=torch.float32).cuda()  
+    ### B = torch.tensor(np.array(dustr['xyz']), dtype=torch.float32).cuda() 
+    ### B_reshaped = B.unsqueeze(-1).cuda() 
+    ### C = torch.concatenate([A, B_reshaped], axis=-1).cuda() 
+    ### extrinsics = C 
+    # BUT WE NEED TO CHANGE dustr['rotation'] UPSTREAM
+    
+    # print('extrinsics and C', extrinsics.shape, C.shape)
+    # print('extrinsics and C', C.dtype, extrinsics.dtype)
     
     return extrinsics, imagenames, this_image 
 
