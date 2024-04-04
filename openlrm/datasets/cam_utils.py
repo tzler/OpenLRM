@@ -398,43 +398,76 @@ def extract_dustr_info(self, _rescale='all'):
     xyz_rescaled_rotated = [rotate_point(i, rotation_matrix) for i in xyz_rescaled]
 
     # final translated, rescaled, and rotated xyz position 
-    
     dust3r['xyz'] = np.array( xyz_rescaled_rotated ) 
+
+    # OR WE COULD LOOK AT THE POSITIONS THAT ARE NOT ROTATED:  
+    # dust3r['xyz'] = np.array( xyz_rescaled ) 
     
     ########################### SECOND: THE ROTATION VECTOR    
-
-    # extract rotation matrices for cameras from all images in this trial
     
+    # THIS IS WRONG BUT I THINK ITS THE RIGHT STRATEGY: 
+    # APPLY SOME TRANSFORMATION TO THE CAMERA ROTATION MATRICES 
+    # IN ORDER TO ENSURE WE'RE LOOKING AT THE ORIGIN (BUT!)
+    # (WE NEED TO MAKE SURE THAT WE'RE PRESERVING THE CAMERA'S ORIENTATION)
+    
+    # extract rotation matrices for cameras from all images in this trial
     rotation = [i[:3,:3] for i in dust3r['poses']]
 
-    for i_camera in range(len(xyz)):
+    # determine rotation matrix relative to the camera pose from this image
+    camera_matrices_relative= [rotation[_idx].T @ i for i in rotation]
 
-        camera_rot = rotation[i_camera]
+    ###### THIS IS WHAT IS WRONG 
+    ###### HERE'S I'M JUST USING THE ROTATION MATRIX USED ON CAMERA POSITION
+    cameras_rotated = [i @ rotation_matrix for i in camera_matrices_relative]
 
-        new_camera_pos = dust3r['xyz'][i_camera]
-
-        # NO CLUE JUST TRYING TO SEE IF THIS WORKS :/ 
-        # Compute the vector pointing from the new camera position to the origin
-        look_vector = -new_camera_pos
-
-        # Create a rotation matrix that aligns the -Z axis with the look vector
-        look_at = np.array([0, 0, -1])  # -Z axis
-        rotation_vector = np.cross(look_at, look_vector)
-        rotation_angle = np.arccos(np.dot(look_at, look_vector) / (np.linalg.norm(look_at) * np.linalg.norm(look_vector)))
-        rotation_matrix = np.eye(3)
-
-        if np.linalg.norm(rotation_vector) > 0:
-            rotation_matrix = np.eye(3) + np.sin(rotation_angle) * np.cross(np.eye(3), rotation_vector / np.linalg.norm(rotation_vector)) + (1 - np.cos(rotation_angle)) * np.square(rotation_vector / np.linalg.norm(rotation_vector))
-
-        # Update the camera's rotation matrix
-        new_camera_rot = np.dot(rotation_matrix, camera_rot)
-
-        print( 'old \n', dust3r['poses'][i_camera][:3,:3].round(2))
-        dust3r['poses'][i_camera][:3,:3] = new_camera_rot
-        print( 'new \n', dust3r['poses'][i_camera][:3,:3].round(2))
+    # determine rotation matrix relative to the camera pose from this image
+    dust3r['rotation'] = cameras_rotated  #[rotation[_idx].T @ i for i in rotation]
     
-    dust3r['rotation'] = np.array( [i[:3,:3] for i in dust3r['poses']] ) 
+    #dust3r['rotation'] = np.array( [i[:3,:3] for i in dust3r['poses']] ) 
 
+
+    # for i_camera in range(len(xyz)):
+
+    #     R = rotation[i_camera]
+    #     #new_camera_pos = dust3r['xyz'][i_camera]
+    #     # NO CLUE JUST TRYING TO SEE IF THIS WORKS :/ 
+    #     # # Compute the vector pointing from the new camera position to the origin
+    #     # look_vector = -new_camera_pos
+
+    #     # # Create a rotation matrix that aligns the -Z axis with the look vector
+    #     # look_at = np.array([0, 0, -1])  # -Z axis
+    #     # rotation_vector = np.cross(look_at, look_vector)
+    #     # rotation_angle = np.arccos(np.dot(look_at, look_vector) / (np.linalg.norm(look_at) * np.linalg.norm(look_vector)))
+    #     # rotation_matrix = np.eye(3)
+
+    #     # if np.linalg.norm(rotation_vector) > 0:
+    #     #     rotation_matrix = np.eye(3) + np.sin(rotation_angle) * np.cross(np.eye(3), rotation_vector / np.linalg.norm(rotation_vector)) + (1 - np.cos(rotation_angle)) * np.square(rotation_vector / np.linalg.norm(rotation_vector))
+
+    #     # # Update the camera's rotation matrix
+    #     # new_camera_rot = np.dot(rotation_matrix, camera_rot)
+
+
+    #     # Step 1: Find the current direction the camera is facing
+    #     current_direction = R @ np.array([0, 0, 1])  # Assuming the camera is initially pointing along the positive z-axis
+    #     print('spagetti wall method')
+    #     # Step 2: Calculate the rotation matrix that rotates the current direction to the desired direction (negative z-axis)
+    #     desired_direction = np.array([0, 0, -1])
+    #     rotation_axis = np.cross(current_direction, desired_direction)
+    #     rotation_angle = np.arccos(np.dot(current_direction, desired_direction) / (np.linalg.norm(current_direction) * np.linalg.norm(desired_direction)))
+    #     rotation_matrix = np.eye(3)
+    #     if np.linalg.norm(rotation_axis) > 0:
+    #         rotation_matrix = np.eye(3) + np.sin(rotation_angle) * np.array([[0, -rotation_axis[2], rotation_axis[1]],
+    #                                                                           [rotation_axis[2], 0, -rotation_axis[0]],
+    #                                                                           [-rotation_axis[1], rotation_axis[0], 0]]) + \
+    #                           (1 - np.cos(rotation_angle)) * (np.outer(rotation_axis, rotation_axis))
+
+    #     # Step 3: Apply the rotation matrix to the current rotation matrix
+    #     new_R = rotation_matrix @ R
+
+    #     print( 'old \n', dust3r['poses'][i_camera][:3,:3].round(2))
+    #     dust3r['poses'][i_camera][:3,:3] = new_R
+    #     print( 'new \n', dust3r['poses'][i_camera][:3,:3].round(2))
+    
     # intrinsics: focal lendth x     
     dust3r['fx'] = dust3r['intrinsics'][0][0,0]
     
@@ -458,7 +491,7 @@ def relative_extrinsics(self, radius: float = 2.0, height: float = 0.8, device: 
     ref: surrounding_views_linspace() 
     """
 
-    print('relative_views')
+    print('relative_views!')
     
     # extract camera extrinsics for all images in this trial 
     dustr = extract_dustr_info(self)
@@ -476,25 +509,32 @@ def relative_extrinsics(self, radius: float = 2.0, height: float = 0.8, device: 
     # convert to torch 
     x, y, z = torch.from_numpy(x), torch.from_numpy(y), torch.from_numpy(z)
 
-    # forma't for openLRM scripts
-    camera_positions = torch.stack([x.float(), y.float(), z.float()], dim=1).cuda() # added cuda()
-    
-    # generate camera extrinsics in the correct format 
-    # PROBABLY EDIT THIS FUNCTION TO INCORPORATE DUST3R ROTATIONS 
-    extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
-    # which basically stacks the translation coordinates onto a 3x3: 
-    # extrinsics = torch.stack([x_axis, y_axis, z_axis, camera_position], dim=-1)
-    # which is equivalent to 
-    ### A = torch.tensor(np.array(dustr['rotation']), dtype=torch.float32).cuda()  
-    ### B = torch.tensor(np.array(dustr['xyz']), dtype=torch.float32).cuda() 
-    ### B_reshaped = B.unsqueeze(-1).cuda() 
-    ### C = torch.concatenate([A, B_reshaped], axis=-1).cuda() 
-    ### extrinsics = C 
-    # BUT WE NEED TO CHANGE dustr['rotation'] UPSTREAM
-    
-    # print('extrinsics and C', extrinsics.shape, C.shape)
-    # print('extrinsics and C', C.dtype, extrinsics.dtype)
-    
+    if self.use_dust3r_camera_rotations == False: 
+        
+        print('using default camera rotations')
+        
+        # prep the camera info into the right format for default scripts
+        camera_positions = torch.stack([x.float(), y.float(), z.float()], dim=1).cuda() # added cuda()
+        
+        # default function which generates cameras looking at the origin
+        extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
+
+    else:   
+
+        print('using the dust3r camera rotations')
+
+        # THE DEFAULT FUNCTION
+        #extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
+        # BASICALLY TAKES THE FOLLOWING DATA STRUCTURE 
+        # > camera_positions = torch.stack([x.float(), y.float(), z.float()], dim=1).cuda() # added cuda()
+        # AND STACKS THE TRANSLATIONS CORDINATES ONTO THE 3x3 ROTATION MATRICES, I.E.,  
+        # > extrinsics = torch.stack([x_axis, y_axis, z_axis, camera_position], dim=-1)
+        # WHICH IS EQUIVALENT TO THE FOLLOWING 
+        rotation_matrices = torch.tensor(np.array(dustr['rotation']), dtype=torch.float32).cuda()  
+        traslation_vector = torch.tensor(np.array(dustr['xyz']), dtype=torch.float32).cuda() 
+        traslation_vector = traslation_vector.unsqueeze(-1).cuda() 
+        extrinsics = torch.concatenate([rotation_matrices, traslation_vector], axis=-1).cuda() 
+        
     return extrinsics, imagenames, this_image 
 
 def relative_intrinsics(self,  w: float = 1., h: float = 1., dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu'),):

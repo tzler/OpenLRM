@@ -204,31 +204,40 @@ class LRMInferrer(Inferrer):
 
     def _render_cameras_relative(self, batch_size: int = 1, device: torch.device = torch.device('cpu')):
         
-        print('_render_cameras_relative() using default intrinsics')
+        print('\n--_render_cameras_relative()')
         
-        LRM_INTRINSICS = True
-        
+        self.use_dust3r_intrinsics = False
+        self.use_dust3r_camera_rotations = False
+
+        #self.
+
         # return: (N, M, D_cam_render)
         render_camera_extrinsics, reference_images, base_image = relative_extrinsics(self, device=device)
 
-        if LRM_INTRINSICS: 
-            render_camera_intrinsics = create_intrinsics(
-                f=0.75,
-                c=0.5,
-                device=device,
+        if not self.use_dust3r_intrinsics: 
+            
+            print('\n--using default intrinsics')
+            render_camera_intrinsics = create_intrinsics(f=0.75, c=0.5, device=device,
               ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
+
         else: 
+            
+            print('\n--using intrinsics from dust3r')
             render_camera_intrinsics = relative_intrinsics(self, device=device,
               ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
 
+        # I DON'T THINK THAT WE NEED TO MODIFY ANY OF THESE 
         render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
         
+        # I DON'T THINK THAT WE NEED TO MODIFY ANY OF THESE 
         render_cameras = render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
 
         return render_cameras, reference_images, base_image
       
     def infer_relative_viewpoints(self, planes: torch.Tensor, frame_size: int, render_size: int, render_views: int, render_fps: int, dump_video_path: str): 
 
+        print('infer_relative_viewpoints')
+        
         N = planes.shape[0]
         render_cameras, reference_imagenames, base_image = self._render_cameras_relative(batch_size=N, device=self.device) 
         # tyler: note sure what anchors are yet 
@@ -299,6 +308,8 @@ class LRMInferrer(Inferrer):
 
     def infer_single(self, image_path: str, source_cam_dist: float, export_video: bool, export_mesh: bool, dump_video_path: str, dump_mesh_path: str):
         
+        print('infer single')
+
         source_size = self.cfg.source_size
         render_size = self.cfg.render_size
         render_views = self.cfg.render_views
