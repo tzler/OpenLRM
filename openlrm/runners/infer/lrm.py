@@ -202,93 +202,6 @@ class LRMInferrer(Inferrer):
                     gradio_codec=self.cfg.app_enabled,
                 )
 
-    def _render_cameras_relative(self, batch_size: int = 1, device: torch.device = torch.device('cpu')):
-        
-        print('\n--_render_cameras_relative()')
-        
-        # return: (N, M, D_cam_render)
-        render_camera_extrinsics, reference_images, base_image = relative_extrinsics(self, device=device)
-
-        if not self.use_dust3r_intrinsics: 
-            
-            print('\n--using default intrinsics')
-            render_camera_intrinsics = create_intrinsics(f=0.75, c=0.5, device=device,
-              ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
-
-        else: 
-            
-            print('\n--using intrinsics from dust3r')
-            render_camera_intrinsics = relative_intrinsics(self, device=device,
-              ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
-
-        # I DON'T THINK THAT WE NEED TO MODIFY ANY OF THESE 
-        render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
-        
-        # I DON'T THINK THAT WE NEED TO MODIFY ANY OF THESE 
-        render_cameras = render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
-
-        return render_cameras, reference_images, base_image
-      
-    def infer_relative_viewpoints(self, planes: torch.Tensor, frame_size: int, render_size: int, render_views: int, render_fps: int, dump_video_path: str): 
-
-        print('infer_relative_viewpoints')
-  
-        self.use_dust3r_intrinsics = False
-        self.use_dust3r_camera_rotations = False
-
-        N = planes.shape[0]
-        save_dir = self.cfg.relative_viewpoints_dir
-        os.makedirs(save_dir, exist_ok=True)
-        
-        render_cameras, imagenames, reference = self._render_cameras_relative(batch_size=N, device=self.device) 
-        # tyler: note sure what anchors are yet 
-        render_anchors = torch.zeros(N, render_cameras.shape[1], 2, device=self.device)
-        render_resolutions = torch.ones(N, render_cameras.shape[1], 1, device=self.device) * render_size
-        render_bg_colors = torch.ones(N, render_cameras.shape[1], 1, device=self.device, dtype=torch.float32) * 1.
-        
-        img_ref = reference[:-4]
-        
-        # generate images from camera positions, given model from reference image
-        for i in range(0, render_cameras.shape[1], 1):
-          
-            _img = imagenames[i][:-4]
-
-            # outputs a dictionary with: images_rgb, images_depth, images_weight
-            i_render = self.model.synthesizer(
-                    planes=planes,
-                    cameras=render_cameras[:, i:i+frame_size],
-                    anchors=render_anchors[:, i:i+frame_size],
-                    resolutions=render_resolutions[:, i:i+frame_size],
-                    bg_colors=render_bg_colors[:, i:i+frame_size],
-                    region_size=render_size,)
-
-            # clumsly but effective conversion into images
-            i_image = i_render['images_rgb'].cpu().detach().numpy()[0,0,:,:,:]
-            i_image = i_image.transpose(1,2,0)
-            i_image = i_image * 255
-            i_image = i_image.astype(np.uint8)
-            i_image = Image.fromarray(i_image)
-            
-            # make a interpretable name 
-            i_file = 'MODELFROM_' + img_ref + '_VIEWPOINTFROM_' + _img + '.png'
-            i_image.save(os.path.join(save_dir, i_file))
-
-        # # merge frames
-        # frames = {
-        #     k: torch.cat([r[k] for r in frames], dim=1)
-        #     for k in frames[0].keys()
-        # }
-        # video_path = os.path.join( save_dir, '%s.mov'%base_image)
-        # for k, v in frames.items():
-        #     if k == 'images_rgb':
-        #         images_to_video(
-        #             images=v[0],
-        #             output_path=video_path,
-        #             fps=render_fps,
-        #             gradio_codec=self.cfg.app_enabled,
-        #         )
-
-
     def infer_mesh(self, planes: torch.Tensor, mesh_size: int, mesh_thres: float, dump_mesh_path: str):
         grid_out = self.model.synthesizer.forward_grid(
             planes=planes,
@@ -403,3 +316,79 @@ class LRMInferrer(Inferrer):
                 dump_video_path=dump_video_path,
                 dump_mesh_path=dump_mesh_path,
             )
+
+    # tyler's functions below
+
+    def _render_cameras_relative(self, batch_size: int = 1, device: torch.device = torch.device('cpu')):
+        
+        print('\n--_render_cameras_relative()')
+        
+        # return: (N, M, D_cam_render)
+        render_camera_extrinsics, reference_images, base_image = relative_extrinsics(self, device=device)
+
+        if not self.use_dust3r_intrinsics: 
+            
+            print('\n--using default intrinsics')
+            render_camera_intrinsics = create_intrinsics(f=0.75, c=0.5, device=device,
+              ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
+
+        else: 
+            
+            print('\n--using intrinsics from dust3r')
+            render_camera_intrinsics = relative_intrinsics(self, device=device,
+              ).unsqueeze(0).repeat(render_camera_extrinsics.shape[0], 1, 1)
+
+        # I DON'T THINK THAT WE NEED TO MODIFY ANY OF THESE 
+        render_cameras = build_camera_standard(render_camera_extrinsics, render_camera_intrinsics)
+        
+        # I DON'T THINK THAT WE NEED TO MODIFY ANY OF THESE 
+        render_cameras = render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
+
+        return render_cameras, reference_images, base_image
+      
+    def infer_relative_viewpoints(self, planes: torch.Tensor, frame_size: int, render_size: int, render_views: int, render_fps: int, dump_video_path: str): 
+      
+        """
+        given model from reference image, generate images from relative camera positions
+        """
+        
+        print('infer_relative_viewpoints')
+  
+        self.use_dust3r_intrinsics = False
+        self.use_dust3r_camera_rotations = False
+
+        N = planes.shape[0]
+        save_dir = self.cfg.relative_viewpoints_dir
+        os.makedirs(save_dir, exist_ok=True)
+        
+        render_cameras, imagenames, reference = self._render_cameras_relative(batch_size=N, device=self.device) 
+        # tyler: note sure what anchors are yet 
+        render_anchors = torch.zeros(N, render_cameras.shape[1], 2, device=self.device)
+        render_resolutions = torch.ones(N, render_cameras.shape[1], 1, device=self.device) * render_size
+        render_bg_colors = torch.ones(N, render_cameras.shape[1], 1, device=self.device, dtype=torch.float32) * 1.
+        
+        img_ref = reference[:-4]
+        
+        for i in range(0, render_cameras.shape[1], 1):
+          
+            _img = imagenames[i][:-4]
+
+            # outputs a dictionary with: images_rgb, images_depth, images_weight
+            i_render = self.model.synthesizer(
+                    planes=planes,
+                    cameras=render_cameras[:, i:i+frame_size],
+                    anchors=render_anchors[:, i:i+frame_size],
+                    resolutions=render_resolutions[:, i:i+frame_size],
+                    bg_colors=render_bg_colors[:, i:i+frame_size],
+                    region_size=render_size,)
+
+            # clumsly but effective conversion into images
+            i_image = i_render['images_rgb'].cpu().detach().numpy()[0,0,:,:,:]
+            i_image = i_image.transpose(1,2,0)
+            i_image = i_image * 255
+            i_image = i_image.astype(np.uint8)
+            i_image = Image.fromarray(i_image)
+            
+            # make an interpretable name 
+            i_file = 'MODELFROM_' + img_ref + '_VIEWPOINTFROM_' + _img + '.png'
+            i_image.save(os.path.join(save_dir, i_file))
