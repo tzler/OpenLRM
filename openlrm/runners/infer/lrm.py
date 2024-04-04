@@ -206,11 +206,6 @@ class LRMInferrer(Inferrer):
         
         print('\n--_render_cameras_relative()')
         
-        self.use_dust3r_intrinsics = False
-        self.use_dust3r_camera_rotations = False
-
-        #self.
-
         # return: (N, M, D_cam_render)
         render_camera_extrinsics, reference_images, base_image = relative_extrinsics(self, device=device)
 
@@ -237,20 +232,27 @@ class LRMInferrer(Inferrer):
     def infer_relative_viewpoints(self, planes: torch.Tensor, frame_size: int, render_size: int, render_views: int, render_fps: int, dump_video_path: str): 
 
         print('infer_relative_viewpoints')
-        
+  
+        self.use_dust3r_intrinsics = False
+        self.use_dust3r_camera_rotations = False
+
         N = planes.shape[0]
-        render_cameras, reference_imagenames, base_image = self._render_cameras_relative(batch_size=N, device=self.device) 
+        save_dir = self.cfg.relative_viewpoints_dir
+        os.makedirs(save_dir, exist_ok=True)
+        
+        render_cameras, imagenames, reference = self._render_cameras_relative(batch_size=N, device=self.device) 
         # tyler: note sure what anchors are yet 
         render_anchors = torch.zeros(N, render_cameras.shape[1], 2, device=self.device)
         render_resolutions = torch.ones(N, render_cameras.shape[1], 1, device=self.device) * render_size
         render_bg_colors = torch.ones(N, render_cameras.shape[1], 1, device=self.device, dtype=torch.float32) * 1.
         
-        save_dir = self.cfg.relative_viewpoints_dir
-        os.makedirs(save_dir, exist_ok=True)
-
-        frames = [] 
+        img_ref = reference[:-4]
+        
+        # generate images from camera positions, given model from reference image
         for i in range(0, render_cameras.shape[1], 1):
-            
+          
+            _img = imagenames[i][:-4]
+
             # outputs a dictionary with: images_rgb, images_depth, images_weight
             i_render = self.model.synthesizer(
                     planes=planes,
@@ -258,33 +260,33 @@ class LRMInferrer(Inferrer):
                     anchors=render_anchors[:, i:i+frame_size],
                     resolutions=render_resolutions[:, i:i+frame_size],
                     bg_colors=render_bg_colors[:, i:i+frame_size],
-                    region_size=render_size,
-                )
-            frames.append(i_render)
+                    region_size=render_size,)
 
+            # clumsly but effective conversion into images
             i_image = i_render['images_rgb'].cpu().detach().numpy()[0,0,:,:,:]
             i_image = i_image.transpose(1,2,0)
-
             i_image = i_image * 255
             i_image = i_image.astype(np.uint8)
             i_image = Image.fromarray(i_image)
-            i_file = 'MODELFROM_' + base_image[:-4] + '_WITHVIEWPOINTFROM_' + reference_imagenames[i][:-4] + '.png'
+            
+            # make a interpretable name 
+            i_file = 'MODELFROM_' + img_ref + '_VIEWPOINTFROM_' + _img + '.png'
             i_image.save(os.path.join(save_dir, i_file))
 
-        # merge frames
-        frames = {
-            k: torch.cat([r[k] for r in frames], dim=1)
-            for k in frames[0].keys()
-        }
-        video_path = os.path.join( save_dir, '%s.mov'%base_image)
-        for k, v in frames.items():
-            if k == 'images_rgb':
-                images_to_video(
-                    images=v[0],
-                    output_path=video_path,
-                    fps=render_fps,
-                    gradio_codec=self.cfg.app_enabled,
-                )
+        # # merge frames
+        # frames = {
+        #     k: torch.cat([r[k] for r in frames], dim=1)
+        #     for k in frames[0].keys()
+        # }
+        # video_path = os.path.join( save_dir, '%s.mov'%base_image)
+        # for k, v in frames.items():
+        #     if k == 'images_rgb':
+        #         images_to_video(
+        #             images=v[0],
+        #             output_path=video_path,
+        #             fps=render_fps,
+        #             gradio_codec=self.cfg.app_enabled,
+        #         )
 
 
     def infer_mesh(self, planes: torch.Tensor, mesh_size: int, mesh_thres: float, dump_mesh_path: str):
