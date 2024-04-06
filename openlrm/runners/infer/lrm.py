@@ -238,8 +238,6 @@ class LRMInferrer(Inferrer):
         image = torch.from_numpy(np.array(Image.open(image_path))).to(self.device)
         image = image.permute(2, 0, 1).unsqueeze(0) / 255.0
 
-        print('image', image.shape )
-
         if image.shape[1] == 4:  # RGBA
             image = image[:, :3, ...] * image[:, 3:, ...] + (1 - image[:, 3:, ...])
         image = torch.nn.functional.interpolate(image, size=(source_size, source_size), mode='bicubic', align_corners=True)
@@ -261,6 +259,7 @@ class LRMInferrer(Inferrer):
                 results.update({
                     'mesh': mesh,
                 })
+
             if self.cfg.infer_relative:
                 print('self.cfg.infer_relative')
                 viewpoints = self.infer_relative_viewpoints(planes, frame_size=frame_size, render_size=render_size, render_views=render_views, render_fps=render_fps, dump_video_path=dump_video_path) 
@@ -270,8 +269,6 @@ class LRMInferrer(Inferrer):
 
 
     def infer(self):
-
-        print('infer')
 
         image_paths = []
         if os.path.isfile(self.cfg.image_input):
@@ -292,29 +289,13 @@ class LRMInferrer(Inferrer):
 
         for image_path in tqdm(image_paths, disable=not self.accelerator.is_local_main_process):
 
-            # prepare dump paths
-            image_name = os.path.basename(image_path)
-            uid = image_name.split('.')[0]
-            subdir_path = os.path.dirname(image_path).replace(omit_prefix, '')
-            subdir_path = subdir_path[1:] if subdir_path.startswith('/') else subdir_path
-            dump_video_path = os.path.join(
-                self.cfg.video_dump,
-                subdir_path,
-                f'{uid}.mov',
-            )
-            dump_mesh_path = os.path.join(
-                self.cfg.mesh_dump,
-                subdir_path,
-                f'{uid}.ply',
-            )
-
             self.infer_single(
                 image_path,
                 source_cam_dist=None,
                 export_video=self.cfg.export_video,
                 export_mesh=self.cfg.export_mesh,
-                dump_video_path=dump_video_path,
-                dump_mesh_path=dump_mesh_path,
+                dump_video_path='',
+                dump_mesh_path='',
             )
 
     # tyler's functions below
@@ -322,7 +303,7 @@ class LRMInferrer(Inferrer):
     def _render_cameras_relative(self, batch_size: int = 1, device: torch.device = torch.device('cpu')):
       
         # return: (N, M, D_cam_render)
-        render_camera_extrinsics, reference_images, base_image = relative_extrinsics(self, device=device)
+        render_camera_extrinsics = relative_extrinsics(self, device=device)
 
         if not self.use_dust3r_intrinsics: 
             
@@ -342,7 +323,7 @@ class LRMInferrer(Inferrer):
         # I DON'T THINK THAT WE NEED TO MODIFY ANY OF THESE 
         render_cameras = render_cameras.unsqueeze(0).repeat(batch_size, 1, 1)
 
-        return render_cameras, reference_images, base_image
+        return render_cameras
       
     def infer_relative_viewpoints(self, planes: torch.Tensor, frame_size: int, render_size: int, render_views: int, render_fps: int, dump_video_path: str): 
       
@@ -356,38 +337,41 @@ class LRMInferrer(Inferrer):
         self.use_dust3r_camera_rotations = True
 
         N = planes.shape[0]
-        save_dir = self.cfg.relative_viewpoints_dir
-        os.makedirs(save_dir, exist_ok=True)
         
         if self.render_simple_flythrough  == True: 
-
-          # extract camera extrinsics for all images in this trial 
-            dustr = extract_dustr_info(self)
-            imagenames = dustr['imagenames'] #[i[i.find('image'):-4] for i in dustr['imagenames']]
-            reference = self.cfg.image_input.split('/')[-1]
-            render_views = 4
+            render_views = 4 # just make life easy 
             render_cameras = self._default_render_cameras(n_views=render_views, batch_size=N, device=self.device)
         else: 
-            render_cameras, imagenames, reference = self._render_cameras_relative(batch_size=N, device=self.device) 
+            render_cameras = self._render_cameras_relative(batch_size=N, device=self.device) 
         
         # tyler: note sure what anchors are yet 
         render_anchors = torch.zeros(N, render_cameras.shape[1], 2, device=self.device)
         render_resolutions = torch.ones(N, render_cameras.shape[1], 1, device=self.device) * render_size
         render_bg_colors = torch.ones(N, render_cameras.shape[1], 1, device=self.device, dtype=torch.float32) * 1.
-      
-        img_ref = reference[:-4]
-        
-        for i in range(0, render_cameras.shape[1], 1):
 
-            _img = imagenames[i][:-4]
+        save_dir = self.cfg.relative_viewpoints_dir
+        os.makedirs(save_dir, exist_ok=True)
+        
+        dust3r = extract_dustr_info(self)
+        
+        # i_trial = dust3r['trial']
+        # reference = self.cfg.image_input.split('/')[-1]
+        # img_ref = reference[:-4]
+
+        _tmp = dust3r['trial']
+        i_trial = _tmp.split('screen')[0] + 'trial' + _tmp.split('screen')[1]
+        i_imagename = self.cfg.image_input.split('/')[-1]
+        i_index = i_imagename.split('image')[1][0:-4]
+
+        for j in range(0, render_cameras.shape[1], 1):
 
             # outputs a dictionary with: images_rgb, images_depth, images_weight
             i_render = self.model.synthesizer(
                     planes=planes,
-                    cameras=render_cameras[:, i:i+frame_size],
-                    anchors=render_anchors[:, i:i+frame_size],
-                    resolutions=render_resolutions[:, i:i+frame_size],
-                    bg_colors=render_bg_colors[:, i:i+frame_size],
+                    cameras=render_cameras[:, j:j+frame_size],
+                    anchors=render_anchors[:, j:j+frame_size],
+                    resolutions=render_resolutions[:, j:j+frame_size],
+                    bg_colors=render_bg_colors[:, j:j+frame_size],
                     region_size=render_size,)
 
             # clumsly but effective conversion into images
@@ -398,5 +382,6 @@ class LRMInferrer(Inferrer):
             i_image = Image.fromarray(i_image)
             
             # make an interpretable name 
-            i_file = 'MODELFROM_' + img_ref + '_VIEWPOINTFROM_' + _img + '.png'
+            #i_file = i_trial + '_' + i_index + '_camera' + str(j) + '.png'
+            i_file = i_trial + '_model' + i_index + '_camera' + str(j) + '.png'
             i_image.save(os.path.join(save_dir, i_file))

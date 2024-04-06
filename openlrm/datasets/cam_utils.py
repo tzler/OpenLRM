@@ -164,7 +164,6 @@ def center_looking_at_camera_pose(
     
     return extrinsics
 
-
 def surrounding_views_linspace(n_views: int, radius: float = 2.0, height: float = 0.8, device: torch.device = torch.device('cpu')):
     """
     n_views: number of surrounding views
@@ -183,17 +182,7 @@ def surrounding_views_linspace(n_views: int, radius: float = 2.0, height: float 
 
     camera_positions = torch.stack([x, y, z], dim=1)
 
-    #print('camera_positions\n\n\n', camera_positions)
-
     extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
-
-    # print('\nsurrounding_views_linespace')
-    # print('\nprojected radius: ', projected_radius)
-    # print('\nn_views', n_views)
-    # print('\npositions', camera_positions.shape)
-    # print('\npositions examples: \n', camera_positions[0,:].round())
-    # print('\nextrinsics', extrinsics.shape)
-    # print('\nextrinsics examples: \n', extrinsics[0,:,:].round())
 
     return extrinsics
 
@@ -226,65 +215,6 @@ def create_intrinsics(
     return intrinsics
 
 # all tyler mods below
-
-def dust3r_to_lrm_coordinates(dust3r, reference_camera_idx = 0, lrm_point = [0, -2, 0]): 
-  """ NOT USING THIS FUNCTION BUT KEEPING FOR REFERENCE —— ALMOST WORKING"""
-  # get origin for this trial 
-  i_origin = dust3r['origin']
-
-  # get translation vectors for each camera
-  i_xyz = [i[:3,3] for i in dust3r['poses']]
-
-  # translate cameras relative to origin 
-  xyz_relative_to_origin = [i - i_origin for i in i_xyz]
-
-  # set refernce point for LRM (determined from data)
-  lrm_point = [0, -2, 0]
-
-  # determine reference camera norm (ie radius)
-  r_camera = np.linalg.norm(xyz_relative_to_origin[reference_camera_idx])
-
-  # determine lrm camera norm (ie radius)
-  r_lrm_point = np.linalg.norm(lrm_point)
-
-  # determine scaling factor 
-  scaleby = r_lrm_point/ r_camera 
-
-  # scale dust3r cameras 
-  xyz_rescaled = [i * scaleby for i in xyz_relative_to_origin]
-
-  # determine translation needed for reference point 
-  reference_translation = lrm_point - xyz_rescaled[reference_camera_idx]
-
-  # translate all points 
-  xyz_rescaled_translated = [i + reference_translation for i in xyz_rescaled]
-
-  # # determine rotation needed for reference point 
-  rotation_matrix = find_rotation(xyz_rescaled[reference_camera_idx], lrm_point)
-
-  # Apply rotation to all points
-  xyz_rescaled_rotated = [rotate_point(i,rotation_matrix) for i in xyz_rescaled]
-
-  return i_xyz, xyz_relative_to_origin, xyz_rescaled, xyz_rescaled_translated, xyz_rescaled_rotated
-
-# from chatGPT
-# def find_rotation(point1, point2):
-
-#     # Step 1: Find the axis of rotation
-#     u = np.cross(point1, point2).astype(np.float64)
-#     u /= np.linalg.norm(u).astype(np.float64)
-
-#     # Step 2: Find the angle of rotation
-#     theta = np.arccos(np.dot(point1, point2))
-
-#     # Step 3: Construct the rotation matrix
-#     K = np.array([[0, -u[2], u[1]],
-#                   [u[2], 0, -u[0]],
-#                   [-u[1], u[0], 0]])
-
-#     R = np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * np.dot(K, K)
-
-#     return R
 
 # from claude 
 def find_rotation(p0, p1):
@@ -333,13 +263,7 @@ def rotate_point(point, rotation_matrix):
 
 def reorder_rotation_matrix(_extrinsics):
     """
-    tried
-    - reorder after transform
-    - reorder before transform
-        x_row, z_row, -y_row # visualizes the back of the object! other times just white space
-        x_row, -z_row, y_row 
-       -x_row, -z_row, y_row 
-       -x_row, y_row, -z_row works! (still uncentered a bit though ... but this is probably from something else)
+    manually determined the conversion from dust3r to LRM coordinates 
     """
 
     # Extract the individual row vectors from the original rotation matrix
@@ -390,7 +314,6 @@ def extract_dustr_info(self, _rescale='single'):
     # option to keep dust3r's relative distance from origin or make it uniform 
     if _rescale=='single': 
 
-        print('all vectors preserve their relative norms')
         # determine reference camera norm (ie radius)
         r_camera = np.linalg.norm(xyz_relative_to_origin[_idx])
 
@@ -400,10 +323,10 @@ def extract_dustr_info(self, _rescale='single'):
         # scale dust3r cameras 
         xyz_rescaled = [i * scaleby for i in xyz_relative_to_origin]
 
+        print('all vectors preserve their relative norms')
+        
     if _rescale=='all':
         
-        print('all vectors now have the same norm')
-
         rs = [np.linalg.norm(xyz_relative_to_origin[i]) for i in [0,1,2,3]]
 
         _scale = [r_lrm_point/rs[i] for i in range(len(xyz))]
@@ -411,21 +334,23 @@ def extract_dustr_info(self, _rescale='single'):
         # scale dust3r cameras 
         xyz_rescaled = [xyz_relative_to_origin[i] * _scale[i] for i in [0,1,2,3]]
 
+        print('all vectors now have the same norm')
+
     # reposition the camera location wrt the object's origin 
     for i in range(len(extrinsics)):
         extrinsics[i][:3,3] = xyz_rescaled[i] #extrinsics[i][:3,3] - dust3r['origin']
         
     # format for default LRM scripts 
-    tmp_lrm_point = torch.tensor(lrm_point).unsqueeze(0)
+    lrm_point = torch.tensor(lrm_point).unsqueeze(0)
 
     # shift to make visualizing our easier to troubleshoot 
     #tmp_lrm_point[0][1] = -3
     
     # default LRM scripts to generate rotation matrix + translation vector
-    _rot_xyz = center_looking_at_camera_pose(tmp_lrm_point)
+    lrm_rot_xyz = center_looking_at_camera_pose(lrm_point)
     
-    # add [0, 0, 0, 1]
-    rot_xyz_0001 = torch.vstack([_rot_xyz[0], torch.tensor([0, 0, 0, 1])])
+    # add [0, 0, 0, 1] to generate extrinsic matrix 
+    rot_xyz_0001 = torch.vstack([lrm_rot_xyz[0], torch.tensor([0, 0, 0, 1])])
 
     # format for my scripts below
     target_extrinsics = rot_xyz_0001.detach().numpy()
@@ -441,9 +366,7 @@ def extract_dustr_info(self, _rescale='single'):
     
     # save translation data for downstream LRM functions
     dust3r['xyz'] = np.array([i[:3,3] for i in extrinsics_new])
-    
-    print( np.array(dust3r['xyz']).round(2))
-    
+  
     # save in a format needed for downstream LRM functions
     dust3r['rotation'] = [i[:3,:3] for i in extrinsics_new] 
 
@@ -470,7 +393,7 @@ def relative_extrinsics(self, radius: float = 2.0, height: float = 0.8, device: 
     ref: surrounding_views_linspace() 
     """
 
-    print('relative_views!')
+    print('relative_extrinsics')
     
     # extract camera extrinsics for all images in this trial 
     dustr = extract_dustr_info(self)
@@ -490,31 +413,33 @@ def relative_extrinsics(self, radius: float = 2.0, height: float = 0.8, device: 
 
     if self.use_dust3r_camera_rotations == False: 
         
-        print('using default camera rotations')
-        
         # prep the camera info into the right format for default scripts
         camera_positions = torch.stack([x.float(), y.float(), z.float()], dim=1).cuda() # added cuda()
         
         # default function which generates cameras looking at the origin
         extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
 
+        print('using default camera rotations')
+        
     else:   
 
+        # the LRM function above center_looking_at_camera_pose() takes the following structure
+        # > camera_positions = torch.stack([x.float(), y.float(), z.float()], dim=1).cuda() 
+        # and stacks the translation vectors onto the 3x3 rotation matrices, i.e.,  
+        # > extrinsics = torch.stack([x_axis, y_axis, z_axis, camera_position], dim=-1)
+        
+        # in order to create the same data structure we take our rotation extrinsics 
+        rotation_matrices = torch.tensor(np.array(dustr['rotation']), dtype=torch.float32).cuda()  
+        # and our translation vectors 
+        traslation_vector = torch.tensor(np.array(dustr['xyz']), dtype=torch.float32).cuda() 
+        # which need to be unsqueezed so that they have the right dimensions
+        traslation_vector = traslation_vector.unsqueeze(-1).cuda() 
+        # and then stacked to given us the extrinsics in a formated required by LRM 
+        extrinsics = torch.concatenate([rotation_matrices, traslation_vector], axis=-1).cuda() 
+        
         print('using the dust3r camera rotations')
 
-        # THE DEFAULT FUNCTION
-        #extrinsics = center_looking_at_camera_pose(camera_positions, device=device)
-        # BASICALLY TAKES THE FOLLOWING DATA STRUCTURE 
-        # > camera_positions = torch.stack([x.float(), y.float(), z.float()], dim=1).cuda() # added cuda()
-        # AND STACKS THE TRANSLATIONS CORDINATES ONTO THE 3x3 ROTATION MATRICES, I.E.,  
-        # > extrinsics = torch.stack([x_axis, y_axis, z_axis, camera_position], dim=-1)
-        # WHICH IS EQUIVALENT TO THE FOLLOWING 
-        rotation_matrices = torch.tensor(np.array(dustr['rotation']), dtype=torch.float32).cuda()  # added cuda()
-        traslation_vector = torch.tensor(np.array(dustr['xyz']), dtype=torch.float32).cuda() # added cuda()
-        traslation_vector = traslation_vector.unsqueeze(-1).cuda() # added cuda()
-        extrinsics = torch.concatenate([rotation_matrices, traslation_vector], axis=-1).cuda() # added cuda()
-        
-    return extrinsics, imagenames, this_image 
+    return extrinsics
 
 def relative_intrinsics(self,  w: float = 1., h: float = 1., dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu'),):
     """
