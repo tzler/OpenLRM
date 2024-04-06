@@ -367,11 +367,14 @@ def extract_dustr_info(self, _rescale='single'):
     # determine the index of this trial 
     _idx = int(self.cfg.image_input.split('/')[-1].split('_')[3][-1])
 
+    # get camera extrinsics and flip axes to line up with LRM conventions
+    extrinsics = [reorder_rotation_matrix(i) for i in dust3r['poses']]
+
     # get origin for this trial 
     i_origin = dust3r['origin']
     
     # get translation vectors for each camera
-    xyz = [i[:3,3] for i in dust3r['poses']]
+    xyz = [i[:3,3] for i in extrinsics]
 
     # translate cameras relative to origin 
     xyz_relative_to_origin = [i - i_origin for i in xyz]
@@ -381,12 +384,42 @@ def extract_dustr_info(self, _rescale='single'):
 
     # determine lrm camera norm (ie radius)
     r_lrm_point = np.linalg.norm(lrm_point)
+
+    _rescale = 'single'
+
+    # option to keep dust3r's relative distance from origin or make it uniform 
+    if _rescale=='single': 
+
+        print('all vectors preserve their relative norms')
+        # determine reference camera norm (ie radius)
+        r_camera = np.linalg.norm(xyz_relative_to_origin[_idx])
+
+        # determine scaling factor 
+        scaleby = r_lrm_point/ r_camera 
+
+        # scale dust3r cameras 
+        xyz_rescaled = [i * scaleby for i in xyz_relative_to_origin]
+
+    if _rescale=='all':
+        
+        print('all vectors now have the same norm')
+
+        rs = [np.linalg.norm(xyz_relative_to_origin[i]) for i in [0,1,2,3]]
+
+        _scale = [r_lrm_point/rs[i] for i in range(len(xyz))]
+
+        # scale dust3r cameras 
+        xyz_rescaled = [xyz_relative_to_origin[i] * _scale[i] for i in [0,1,2,3]]
+
+    # reposition the camera location wrt the object's origin 
+    for i in range(len(extrinsics)):
+        extrinsics[i][:3,3] = xyz_rescaled[i] #extrinsics[i][:3,3] - dust3r['origin']
         
     # format for default LRM scripts 
     tmp_lrm_point = torch.tensor(lrm_point).unsqueeze(0)
 
     # shift to make visualizing our easier to troubleshoot 
-    tmp_lrm_point[0][1] = -3
+    #tmp_lrm_point[0][1] = -3
     
     # default LRM scripts to generate rotation matrix + translation vector
     _rot_xyz = center_looking_at_camera_pose(tmp_lrm_point)
@@ -396,9 +429,6 @@ def extract_dustr_info(self, _rescale='single'):
 
     # format for my scripts below
     target_extrinsics = rot_xyz_0001.detach().numpy()
-    
-    # get camera extrinsics and flip axes to line up with LRM conventions
-    extrinsics = [reorder_rotation_matrix(i) for i in dust3r['poses']]
 
     # get transform relative to reference camera
     transform = target_extrinsics @ np.linalg.inv(extrinsics[_idx])
@@ -411,6 +441,8 @@ def extract_dustr_info(self, _rescale='single'):
     
     # save translation data for downstream LRM functions
     dust3r['xyz'] = np.array([i[:3,3] for i in extrinsics_new])
+    
+    print( np.array(dust3r['xyz']).round(2))
     
     # save in a format needed for downstream LRM functions
     dust3r['rotation'] = [i[:3,:3] for i in extrinsics_new] 
@@ -477,10 +509,10 @@ def relative_extrinsics(self, radius: float = 2.0, height: float = 0.8, device: 
         # AND STACKS THE TRANSLATIONS CORDINATES ONTO THE 3x3 ROTATION MATRICES, I.E.,  
         # > extrinsics = torch.stack([x_axis, y_axis, z_axis, camera_position], dim=-1)
         # WHICH IS EQUIVALENT TO THE FOLLOWING 
-        rotation_matrices = torch.tensor(np.array(dustr['rotation']), dtype=torch.float32).cuda()  
-        traslation_vector = torch.tensor(np.array(dustr['xyz']), dtype=torch.float32).cuda() 
-        traslation_vector = traslation_vector.unsqueeze(-1).cuda() 
-        extrinsics = torch.concatenate([rotation_matrices, traslation_vector], axis=-1).cuda() 
+        rotation_matrices = torch.tensor(np.array(dustr['rotation']), dtype=torch.float32).cuda()  # added cuda()
+        traslation_vector = torch.tensor(np.array(dustr['xyz']), dtype=torch.float32).cuda() # added cuda()
+        traslation_vector = traslation_vector.unsqueeze(-1).cuda() # added cuda()
+        extrinsics = torch.concatenate([rotation_matrices, traslation_vector], axis=-1).cuda() # added cuda()
         
     return extrinsics, imagenames, this_image 
 

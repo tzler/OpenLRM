@@ -32,7 +32,7 @@ from openlrm.runners import REGISTRY_RUNNERS
 from openlrm.utils.video import images_to_video
 from openlrm.utils.hf_hub import wrap_model_hub
 # tyler adds 
-from openlrm.datasets.cam_utils import relative_extrinsics, relative_intrinsics
+from openlrm.datasets.cam_utils import relative_extrinsics, relative_intrinsics, extract_dustr_info
 
 logger = get_logger(__name__)
 
@@ -351,7 +351,7 @@ class LRMInferrer(Inferrer):
         """
         
         print('infer_relative_viewpoints')
-  
+        self.render_simple_flythrough = False
         self.use_dust3r_intrinsics = False
         self.use_dust3r_camera_rotations = True
 
@@ -359,16 +359,26 @@ class LRMInferrer(Inferrer):
         save_dir = self.cfg.relative_viewpoints_dir
         os.makedirs(save_dir, exist_ok=True)
         
-        render_cameras, imagenames, reference = self._render_cameras_relative(batch_size=N, device=self.device) 
+        if self.render_simple_flythrough  == True: 
+
+          # extract camera extrinsics for all images in this trial 
+            dustr = extract_dustr_info(self)
+            imagenames = dustr['imagenames'] #[i[i.find('image'):-4] for i in dustr['imagenames']]
+            reference = self.cfg.image_input.split('/')[-1]
+            render_views = 4
+            render_cameras = self._default_render_cameras(n_views=render_views, batch_size=N, device=self.device)
+        else: 
+            render_cameras, imagenames, reference = self._render_cameras_relative(batch_size=N, device=self.device) 
+        
         # tyler: note sure what anchors are yet 
         render_anchors = torch.zeros(N, render_cameras.shape[1], 2, device=self.device)
         render_resolutions = torch.ones(N, render_cameras.shape[1], 1, device=self.device) * render_size
         render_bg_colors = torch.ones(N, render_cameras.shape[1], 1, device=self.device, dtype=torch.float32) * 1.
-        
+      
         img_ref = reference[:-4]
         
         for i in range(0, render_cameras.shape[1], 1):
-          
+
             _img = imagenames[i][:-4]
 
             # outputs a dictionary with: images_rgb, images_depth, images_weight
