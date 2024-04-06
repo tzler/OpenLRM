@@ -160,12 +160,8 @@ def center_looking_at_camera_pose(
     y_axis = torch.cross(z_axis, x_axis)
     y_axis = y_axis / y_axis.norm(dim=-1, keepdim=True)
 
-    #print('axes',z_axis.shape, '\n', z_axis.round() )
-
     extrinsics = torch.stack([x_axis, y_axis, z_axis, camera_position], dim=-1)
     
-    #print('extrinsics.shape:', extrinsics.shape, '\nextrinsics:', extrinsics)
-
     return extrinsics
 
 
@@ -335,36 +331,26 @@ def find_rotation(p0, p1):
 def rotate_point(point, rotation_matrix):
     return np.dot(rotation_matrix, point)
 
-def transform_extrinsics(_dust3r, reference_camera_idx):
+def reorder_rotation_matrix(_extrinsics):
+    """
+    tried
+    - reorder after transform
+    - reorder before transform
+        x_row, z_row, -y_row # visualizes the back of the object! other times just white space
+        x_row, -z_row, y_row 
+       -x_row, -z_row, y_row 
+    """
+    # Extract the individual row vectors from the original rotation matrix
+    x_row = _extrinsics[:,0]
+    y_row = _extrinsics[:,1]
+    z_row = _extrinsics[:,2]
 
-  # if target_extrinsics:
-
-  target_extrinsics = np.array([[ 1.0000e+00,  7.5212e-34, -1.1075e-17, -2.2149e-17],
-       [-1.1075e-17,  6.7914e-17, -1.0000e+00, -2.0000e+00],
-       [ 0.0000e+00,  1.0000e+00,  6.7914e-17,  1.3583e-16],
-       [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]])
-  
-  # get camera extrinsics
-  extrinsics = np.copy(_dust3r['poses'])
-
-  # get origin for this trial
-  i_origin = _dust3r['origin']
-
-  for i in range(len(extrinsics)):
-    extrinsics[i][:3,3] = extrinsics[i][:3,3] - _dust3r['origin']
-
-  # get transform relative to reference camera
-  transform = target_extrinsics @ np.linalg.inv(extrinsics[reference_camera_idx])
-
-  # transform extrinsics
-  extrinsics_new = [(transform @ extrinsics[i]) for i in range(4)]
-
-  # make sure that the reference camera has the desired position
-  assert sum(extrinsics_new[reference_camera_idx][:3,3].round(5) == target_extrinsics[:3,3].round(5))==3
-
-  return np.array(extrinsics_new)
+    return np.stack((-x_row, y_row, -z_row,  _extrinsics[:,3])).T
 
 def extract_dustr_info(self, _rescale='single'): 
+
+    INDEPENDENT_ROTATION_AND_TRANSLATION = False
+    REORDER_ROTATION_DIMENSIONS = False
 
     # determine which trial this image is associated with 
     i_trial = self.cfg.image_input.split('/')[-1].split('_image')[0]
@@ -382,8 +368,6 @@ def extract_dustr_info(self, _rescale='single'):
     # determine the index of this trial 
     _idx = int(self.cfg.image_input.split('/')[-1].split('_')[3][-1])
 
-    ########################### FIRST: THE TRANSLATION VENCTOR    
-
     # get origin for this trial 
     i_origin = dust3r['origin']
 
@@ -398,91 +382,100 @@ def extract_dustr_info(self, _rescale='single'):
 
     # determine lrm camera norm (ie radius)
     r_lrm_point = np.linalg.norm(lrm_point)
-  
-    # option to keep dust3r's relative distance from origin or make it uniform 
-    if _rescale=='single': 
-
-        print('all vectors preserve their relative norms')
-        # determine reference camera norm (ie radius)
-        r_camera = np.linalg.norm(xyz_relative_to_origin[_idx])
-
-        # determine scaling factor 
-        scaleby = r_lrm_point/ r_camera 
-
-        # scale dust3r cameras 
-        xyz_rescaled = [i * scaleby for i in xyz_relative_to_origin]
-
-    if _rescale=='all':
         
-        print('all vectors now have the same norm')
+    if INDEPENDENT_ROTATION_AND_TRANSLATION: 
+        # first solution i figured out but only works for translation
 
-        rs = [np.linalg.norm(xyz_relative_to_origin[i]) for i in [0,1,2,3]]
+        # option to keep dust3r's relative distance from origin or make it uniform 
+        if _rescale=='single': 
 
-        _scale = [r_lrm_point/rs[i] for i in range(len(xyz))]
+            print('all vectors preserve their relative norms')
+            # determine reference camera norm (ie radius)
+            r_camera = np.linalg.norm(xyz_relative_to_origin[_idx])
 
-        # scale dust3r cameras 
-        xyz_rescaled = [xyz_relative_to_origin[i] * _scale[i] for i in [0,1,2,3]]
+            # determine scaling factor 
+            scaleby = r_lrm_point/ r_camera 
 
-    # determine rotation needed for reference point 
-    rotation_matrix = find_rotation(xyz_rescaled[_idx], lrm_point)
+            # scale dust3r cameras 
+            xyz_rescaled = [i * scaleby for i in xyz_relative_to_origin]
 
-    # Apply rotation to all points
-    xyz_rescaled_rotated = [rotate_point(i, rotation_matrix) for i in xyz_rescaled]
+        if _rescale=='all':
+            
+            print('all vectors now have the same norm')
 
-    # final translated, rescaled, and rotated xyz position 
-    dust3r['xyz'] = np.array( xyz_rescaled_rotated ) 
+            rs = [np.linalg.norm(xyz_relative_to_origin[i]) for i in [0,1,2,3]]
 
-    # OR WE COULD LOOK AT THE POSITIONS THAT ARE NOT ROTATED:  
-    # dust3r['xyz'] = np.array( xyz_rescaled ) 
+            _scale = [r_lrm_point/rs[i] for i in range(len(xyz))]
+
+            # scale dust3r cameras 
+            xyz_rescaled = [xyz_relative_to_origin[i] * _scale[i] for i in [0,1,2,3]]
+
+        # determine rotation needed for reference point 
+        rotation_matrix = find_rotation(xyz_rescaled[_idx], lrm_point)
+
+        # Apply rotation to all points
+        xyz_rescaled_rotated = [rotate_point(i, rotation_matrix) for i in xyz_rescaled]
+
+        # final translated, rescaled, and rotated xyz position 
+        dust3r['xyz'] = np.array( xyz_rescaled_rotated ) 
+
+        # OR WE COULD LOOK AT THE POSITIONS THAT ARE NOT ROTATED:  
+        # dust3r['xyz'] = np.array( xyz_rescaled ) 
     
     ########################### SECOND: THE ROTATION VECTOR    
-    
-    # THIS IS WRONG BUT I THINK ITS THE RIGHT STRATEGY: 
-    # APPLY SOME TRANSFORMATION TO THE CAMERA ROTATION MATRICES 
-    # IN ORDER TO ENSURE WE'RE LOOKING AT THE ORIGIN (BUT!)
-    # (WE NEED TO MAKE SURE THAT WE'RE PRESERVING THE CAMERA'S ORIENTATION)
-    
-    # # extract rotation matrices for cameras from all images in this trial
-    # rotation = [i[:3,:3] for i in dust3r['poses']]
-
-    # # determine rotation matrix relative to the camera pose from this image
-    # camera_matrices_relative= [rotation[_idx].T @ i for i in rotation]
-
-    # ###### THIS IS WHAT IS WRONG 
-    # ###### HERE'S I'M JUST USING THE ROTATION MATRIX USED ON CAMERA POSITION
-    # cameras_rotated = [i @ rotation_matrix for i in camera_matrices_relative]
-    
+  
     # extract from the LRM scripts manually (AUTOMATE!)
+    else: 
+        
+
+        # target_extrinsics = np.array(
+        #   [[ 1.0000e+00,  7.5212e-34, -1.1075e-17, -2.2149e-17],
+        #   [-1.1075e-17,  6.7914e-17, -1.0000e+00, -5.0000e+00],
+        #   [ 0.0000e+00,  1.0000e+00,  6.7914e-17,  1.3583e-16],
+        #   [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]])
+        
+        # format for default LRM scripts 
+        tmp_lrm_point = torch.tensor(lrm_point).unsqueeze(0)
+
+        # shift to make visualizing our easier to troubleshoot 
+        tmp_lrm_point[0][1] = -5
+        
+        # default LRM scripts to generate rotation matrix + translation vector
+        _rot_xyz = center_looking_at_camera_pose(tmp_lrm_point)
+        
+        # add [0, 0, 0, 1]
+        rot_xyz_0001 = torch.vstack([_rot_xyz[0], torch.tensor([0, 0, 0, 1])])
+
+        # format for my scripts below
+        target_extrinsics = rot_xyz_0001.detach().numpy()
+        
+        # get camera extrinsics
+        extrinsics = np.copy(dust3r['poses'])
+        
+        extrinsics = [reorder_rotation_matrix(i) for i in extrinsics]
+
+        for i in range(len(extrinsics)):
+          extrinsics[i][:3,3] = xyz_relative_to_origin[i] #extrinsics[i][:3,3] - _dust3r['origin']
+
+        # get transform relative to reference camera
+        transform = target_extrinsics @ np.linalg.inv(extrinsics[_idx])
+
+        # transform extrinsics
+        extrinsics_new = [(transform @ extrinsics[i]) for i in range(4)]
+
+        # make sure that the reference camera has the desired position
+        assert sum(extrinsics_new[_idx][:3,3].round(5) == target_extrinsics[:3,3].round(5))==3
+        
+        # save translation data
+        dust3r['xyz'] = np.array([i[:3,3] for i in extrinsics_new])
+
+        #if REORDER_ROTATION_DIMENSIONS==True: 
+        # reorder so are ordered according to LRM's convention
+        #extrinsics_new = [reorder_rotation_matrix(i) for i in extrinsics_new]
+        
+        # save in a format needed for downstream LRM functions
+        dust3r['rotation'] = [i[:3,:3] for i in extrinsics_new] 
     
-    # I CHANGED THE TRANSLATION MATRIX TO 0, -3, 0 to troubleshoot 
-    target_extrinsics = np.array([[ 1.0000e+00,  7.5212e-34, -1.1075e-17, -2.2149e-17],
-        [-1.1075e-17,  6.7914e-17, -1.0000e+00, -3.0000e+00],
-        [ 0.0000e+00,  1.0000e+00,  6.7914e-17,  1.3583e-16],
-        [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]])
-    
-    # get camera extrinsics
-    extrinsics = np.copy(dust3r['poses'])
-
-    print('using xyz_relative_to_origin')
-    for i in range(len(extrinsics)):
-      extrinsics[i][:3,3] = xyz_relative_to_origin[i] #extrinsics[i][:3,3] - _dust3r['origin']
-
-    # get transform relative to reference camera
-    transform = target_extrinsics @ np.linalg.inv(extrinsics[_idx])
-
-    # transform extrinsics
-    extrinsics_new = [(transform @ extrinsics[i]) for i in range(4)]
-
-    # make sure that the reference camera has the desired position
-    assert sum(extrinsics_new[_idx][:3,3].round(5) == target_extrinsics[:3,3].round(5))==3
-    
-    dust3r['xyz'] = np.array([i[:3,3] for i in extrinsics_new])
-
-    # determine rotation matrix relative to the camera pose from  this image
-    dust3r['rotation'] = [i[:3,:3] for i in extrinsics_new] #[rotation[_idx].T @ i for i in rotation]
-    
-    #dust3r['rotation'] = np.array( [i[:3,:3] for i in dust3r['poses']] ) 
-
     # intrinsics: focal lendth x     
     dust3r['fx'] = dust3r['intrinsics'][0][0,0]
     
@@ -622,3 +615,32 @@ def relative_intrinsics(self,  w: float = 1., h: float = 1., dtype: torch.dtype 
 #     print( 'old \n', dust3r['poses'][i_camera][:3,:3].round(2))
 #     dust3r['poses'][i_camera][:3,:3] = new_R
 #     print( 'new \n', dust3r['poses'][i_camera][:3,:3].round(2))
+
+# def transform_extrinsics(_dust3r, reference_camera_idx):
+
+#   # if target_extrinsics:
+
+#   target_extrinsics = np.array([[ 1.0000e+00,  7.5212e-34, -1.1075e-17, -2.2149e-17],
+#        [-1.1075e-17,  6.7914e-17, -1.0000e+00, -2.0000e+00],
+#        [ 0.0000e+00,  1.0000e+00,  6.7914e-17,  1.3583e-16],
+#        [ 0.0000e+00,  0.0000e+00,  0.0000e+00,  1.0000e+00]])
+  
+#   # get camera extrinsics
+#   extrinsics = np.copy(_dust3r['poses'])
+
+#   # get origin for this trial
+#   i_origin = _dust3r['origin']
+
+#   for i in range(len(extrinsics)):
+#     extrinsics[i][:3,3] = extrinsics[i][:3,3] - _dust3r['origin']
+
+#   # get transform relative to reference camera
+#   transform = target_extrinsics @ np.linalg.inv(extrinsics[reference_camera_idx])
+
+#   # transform extrinsics
+#   extrinsics_new = [(transform @ extrinsics[i]) for i in range(4)]
+
+#   # make sure that the reference camera has the desired position
+#   assert sum(extrinsics_new[reference_camera_idx][:3,3].round(5) == target_extrinsics[:3,3].round(5))==3
+
+#   return np.array(extrinsics_new)
