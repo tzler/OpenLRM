@@ -320,9 +320,7 @@ class LRMInferrer(Inferrer):
     # tyler's functions below
 
     def _render_cameras_relative(self, batch_size: int = 1, device: torch.device = torch.device('cpu')):
-        
-        #print('\n--_render_cameras_relative()')
-        
+      
         # return: (N, M, D_cam_render)
         render_camera_extrinsics, reference_images, base_image = relative_extrinsics(self, device=device)
 
