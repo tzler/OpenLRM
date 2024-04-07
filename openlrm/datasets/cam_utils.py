@@ -273,6 +273,31 @@ def reorder_rotation_matrix(_extrinsics):
 
     return np.stack((-x_row, y_row, -z_row,  _extrinsics[:,3])).T
 
+def camera_normalization_dust3r(normed_dist_to_center, idx, poses: torch.Tensor, ret_transform: bool = False):
+    assert normed_dist_to_center is not None
+    pivotal_pose = compose_extrinsic_RT(poses[idx:idx+1])
+    dist_to_center = pivotal_pose[:, :3, 3].norm(dim=-1, keepdim=True).item() \
+        if normed_dist_to_center == 'auto' else normed_dist_to_center
+
+    # compute camera norm (new version)
+    canonical_camera_extrinsics = torch.tensor([[
+        [1, 0, 0, 0],
+        [0, 0, -1, -dist_to_center],
+        [0, 1, 0, 0],
+        [0, 0, 0, 1],
+    ]], dtype=torch.float32)
+    pivotal_pose_inv = torch.inverse(pivotal_pose)
+    camera_norm_matrix = torch.bmm(canonical_camera_extrinsics, pivotal_pose_inv)
+
+    # normalize all views
+    poses = compose_extrinsic_RT(poses)
+    poses = torch.bmm(camera_norm_matrix.repeat(poses.shape[0], 1, 1), poses)
+    poses = decompose_extrinsic_RT(poses)
+
+    if ret_transform:
+        return poses, camera_norm_matrix.squeeze(dim=0)
+    return poses
+
 def extract_dustr_info(self, _rescale='single'): 
 
     # determine which trial this image is associated with 
@@ -290,9 +315,10 @@ def extract_dustr_info(self, _rescale='single'):
     
     # determine the index of this trial 
     _idx = int(self.cfg.image_input.split('/')[-1].split('_')[3][-1])
-
+    
     # get camera extrinsics and flip axes to line up with LRM conventions
     extrinsics = [reorder_rotation_matrix(i) for i in dust3r['poses']]
+    #extrinsics = [i for i in dust3r['poses']]
 
     # get origin for this trial 
     i_origin = dust3r['origin']
@@ -309,7 +335,7 @@ def extract_dustr_info(self, _rescale='single'):
     # determine lrm camera norm (ie radius)
     r_lrm_point = np.linalg.norm(lrm_point)
 
-    _rescale = 'single'
+    _rescale = 'all'
 
     # option to keep dust3r's relative distance from origin or make it uniform 
     if _rescale=='single': 
@@ -355,11 +381,20 @@ def extract_dustr_info(self, _rescale='single'):
     # format for my scripts below
     target_extrinsics = rot_xyz_0001.detach().numpy()
 
+    print('TARGET EXTRINSICS\n', target_extrinsics.round(2))
     # get transform relative to reference camera
     transform = target_extrinsics @ np.linalg.inv(extrinsics[_idx])
 
     # transform extrinsics
     extrinsics_new = [(transform @ extrinsics[i]) for i in range(4)]
+
+    ####### TESTING 
+    #extrinsics = [reorder_rotation_matrix(i) for i in dust3r['poses']]    
+    # poses = [i[:3,:] for i in dust3r['poses']] 
+    # poses = torch.tensor(poses, device='cpu')
+    # print('\n\nPOSES', poses.shape, '\n', poses[0].round())     
+    # poses = camera_normalization_dust3r(2, _idx, poses)
+    # print('\n\nPOSES', poses.shape, '\n', poses[0].round())     
 
     # make sure that the reference camera has the desired position
     assert sum(extrinsics_new[_idx][:3,3].round(5) == target_extrinsics[:3,3].round(5))==3

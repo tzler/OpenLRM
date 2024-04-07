@@ -359,7 +359,7 @@ class LRMInferrer(Inferrer):
         # img_ref = reference[:-4]
 
         _tmp = dust3r['trial']
-        i_trial = _tmp.split('screen')[0] + 'trial' + _tmp.split('screen')[1]
+        i_trial = _tmp.split('_image')[0] #+ 'trial' + _tmp.split('screen')[1]
         i_imagename = self.cfg.image_input.split('/')[-1]
         i_index = i_imagename.split('image')[1][0:-4]
 
